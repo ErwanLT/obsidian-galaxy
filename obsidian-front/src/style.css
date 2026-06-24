@@ -187,6 +187,46 @@ html, body { width:100%; height:100%; overflow:hidden; background:#000010; font-
   pointer-events:none; white-space:nowrap; font-family:'Space Mono',monospace;
 }
 
+/* Left Toolbar (Mockup Style) */
+#left-toolbar {
+  position: absolute;
+  top: 50%;
+  left: 22px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(8, 0, 26, 0.78);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 16px 8px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  pointer-events: all;
+  box-shadow: 0 0 30px rgba(124, 58, 237, 0.08);
+}
+.btn-tool {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--gray-dim);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--ease);
+  font-size: 0.9rem;
+}
+.btn-tool:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--purple-l);
+  box-shadow: 0 0 12px rgba(124, 58, 237, 0.4);
+  transform: scale(1.08);
+}
+
+
 /* Tooltip */
 #tooltip {
   position:fixed; pointer-events:none; z-index:200;

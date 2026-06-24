@@ -142,6 +142,9 @@ function buildRootView(universeData) {
     const pos = positions[i];
     const obj = createGalaxy(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
 
     // Label
     if (showLabels) {
@@ -177,12 +180,17 @@ function buildGalaxyView(galaxyNode) {
   centralObj.userData.clickable = false;
   currentObjects.push(centralObj);
 
-  // Solar systems in orbit
-  const ssPositions = orbitLayout(dirs.length, 60, 180);
+  // Solar systems in orbit (more compact)
+  const ssPositions = orbitLayout(dirs.length, 65, 155);
   dirs.forEach((node, i) => {
     const pos = ssPositions[i];
     const obj = createSolarSystem(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
 
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0x4C1D95, 0);
     orbitObjects.push(orbit);
@@ -199,11 +207,16 @@ function buildGalaxyView(galaxyNode) {
   });
 
   // Loose markdown files as moons close in
-  const moonPositions = orbitLayout(files.length, 35, 55);
+  const moonPositions = orbitLayout(files.length, 36, 58);
   files.forEach((node, i) => {
     const pos = moonPositions[i];
     const obj = createMoon(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
     if (showLabels) {
       const lp = new THREE.Vector3(pos.x, pos.y + 5, pos.z);
       const sprite = createLabel(node.name, lp, '#A1A1AA', 30);
@@ -235,12 +248,17 @@ function buildSolarSystemView(ssNode) {
   centralObj.userData.clickable = false;
   currentObjects.push(centralObj);
 
-  // Planets
-  const pPositions = orbitLayout(dirs.length, 40, 140);
+  // Planets (more compact)
+  const pPositions = orbitLayout(dirs.length, 50, 120);
   dirs.forEach((node, i) => {
     const pos = pPositions[i];
     const obj = createPlanet(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
 
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0x0891B2, 0.05 * i);
     orbitObjects.push(orbit);
@@ -257,11 +275,16 @@ function buildSolarSystemView(ssNode) {
   });
 
   // Markdown files as moons near star
-  const mPositions = orbitLayout(files.length, 20, 35);
+  const mPositions = orbitLayout(files.length, 35, 50);
   files.forEach((node, i) => {
     const pos = mPositions[i];
     const obj = createMoon(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
     if (showLabels) {
       const lp = new THREE.Vector3(pos.x, pos.y + 4, pos.z);
       const sprite = createLabel(node.name, lp, '#9CA3AF', 28);
@@ -292,12 +315,17 @@ function buildPlanetView(planetNode) {
   centralObj.userData.clickable = false;
   currentObjects.push(centralObj);
 
-  // Sub-directories as sub-planets
-  const spPositions = orbitLayout(dirs.length, 30, 80);
+  // Sub-directories as sub-planets (more compact)
+  const spPositions = orbitLayout(dirs.length, 36, 78);
   dirs.forEach((node, i) => {
     const pos = spPositions[i];
     const obj = createPlanet(renderer.scene, node, pos, i + 1);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0xF59E0B, 0.1 * i);
     orbitObjects.push(orbit);
     if (showLabels) {
@@ -310,12 +338,17 @@ function buildPlanetView(planetNode) {
     currentObjects.push(obj);
   });
 
-  // Moons
-  const mPositions = orbitLayout(files.length, 15, 28);
+  // Moons (set to 35-50)
+  const mPositions = orbitLayout(files.length, 35, 50);
   files.forEach((node, i) => {
     const pos = mPositions[i];
     const obj = createMoon(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
+    obj.userData.baseX = pos.x;
+    obj.userData.baseY = pos.y;
+    obj.userData.baseZ = pos.z;
+    obj.userData.orbitRadius = pos.length();
+    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
     if (showLabels) {
       const lp = new THREE.Vector3(pos.x, pos.y + 3, pos.z);
       const sprite = createLabel(node.name, lp, '#CBD5E1', 26);
@@ -353,9 +386,9 @@ function enterNode(node) {
       return; // moons/files don't enter
   }
 
-  // Fly to overview
+  // Fly to compact overview (adjusted zoom distance +20% again)
   renderer.flyTo(
-    { x: 0, y: 60, z: 200 },
+    { x: 0, y: 60, z: 190 },
     { x: 0, y: 0, z: 0 },
     1000,
   );
@@ -649,10 +682,10 @@ function animateObjects(time) {
       case VisualType.PLANET: {
         // Orbit around center if not center obj
         if (obj.userData.clickable) {
-          const baseAngle = obj.userData.orbitAngle ?? (i * (Math.PI * 2 / Math.max(currentObjects.length - 1, 1)));
+          const baseAngle = obj.userData.orbitAngle ?? 0;
           const speed = 0.015 + i * 0.003;
           const angle = baseAngle + t * speed;
-          const r = obj.position.length() || 60;
+          const r = obj.userData.orbitRadius ?? 60;
           obj.position.x = Math.cos(angle) * r;
           obj.position.z = Math.sin(angle) * r;
         }
@@ -661,10 +694,10 @@ function animateObjects(time) {
       }
       case VisualType.MOON: {
         if (obj.userData.clickable) {
-          const baseAngle = obj.userData.orbitAngle ?? (i * (Math.PI * 2 / Math.max(currentObjects.length - 1, 1)));
+          const baseAngle = obj.userData.orbitAngle ?? 0;
           const speed = 0.04 + i * 0.006;
           const angle = baseAngle + t * speed;
-          const r = obj.position.length() || 20;
+          const r = obj.userData.orbitRadius ?? 20;
           obj.position.x = Math.cos(angle) * r;
           obj.position.z = Math.sin(angle) * r;
         }
@@ -672,9 +705,10 @@ function animateObjects(time) {
       }
     }
 
-    // Gentle float
+    // Gentle float (locked oscillation around baseY to prevent accumulation drift)
     if (obj.userData.clickable) {
-      obj.position.y += Math.sin(t * 0.5 + i * 1.3) * 0.01;
+      const baseY = obj.userData.baseY ?? 0;
+      obj.position.y = baseY + Math.sin(t * 1.5 + i * 1.3) * 0.5;
     }
   });
 
@@ -749,6 +783,46 @@ async function init() {
       showLabels = !showLabels;
       labelObjects.forEach(l => { l.visible = showLabels; });
       btnLabels.style.opacity = showLabels ? '1' : '0.4';
+      const btnToolLabels = document.getElementById('btn-tool-labels');
+      if (btnToolLabels) btnToolLabels.style.opacity = showLabels ? '1' : '0.4';
+    });
+  }
+
+  // Left Toolbar Zoom & Label interactions
+  const btnToolZoomIn = document.getElementById('btn-tool-zoom-in');
+  const btnToolZoomOut = document.getElementById('btn-tool-zoom-out');
+  const btnToolLabels = document.getElementById('btn-tool-labels');
+
+  if (btnToolZoomIn) {
+    btnToolZoomIn.addEventListener('click', () => {
+      if (!renderer) return;
+      const target = renderer.controls.target;
+      const pos = renderer.camera.position;
+      const dir = new THREE.Vector3().subVectors(target, pos).normalize();
+      const dist = pos.distanceTo(target);
+      const newPos = pos.clone().addScaledVector(dir, dist * 0.25);
+      renderer.flyTo(newPos, target, 400);
+    });
+  }
+
+  if (btnToolZoomOut) {
+    btnToolZoomOut.addEventListener('click', () => {
+      if (!renderer) return;
+      const target = renderer.controls.target;
+      const pos = renderer.camera.position;
+      const dir = new THREE.Vector3().subVectors(target, pos).normalize();
+      const dist = pos.distanceTo(target);
+      const newPos = pos.clone().addScaledVector(dir, -dist * 0.25);
+      renderer.flyTo(newPos, target, 400);
+    });
+  }
+
+  if (btnToolLabels) {
+    btnToolLabels.addEventListener('click', () => {
+      showLabels = !showLabels;
+      labelObjects.forEach(l => { l.visible = showLabels; });
+      if (btnLabels) btnLabels.style.opacity = showLabels ? '1' : '0.4';
+      btnToolLabels.style.opacity = showLabels ? '1' : '0.4';
     });
   }
 

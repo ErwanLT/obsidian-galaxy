@@ -28,7 +28,7 @@ export class GalaxyRenderer {
     this.renderer.setSize(this.w, this.h);
     this.renderer.setClearColor(0x000010, 1);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.3;
+    this.renderer.toneMappingExposure = 1.2;
 
     // Controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -41,9 +41,9 @@ export class GalaxyRenderer {
     this.controls.panSpeed = 0.8;
 
     // Lights
-    this.scene.add(new THREE.AmbientLight(0x111133, 3));
-    const dl1 = new THREE.DirectionalLight(0x7C3AED, 2); dl1.position.set(100,100,50); this.scene.add(dl1);
-    const dl2 = new THREE.DirectionalLight(0x06B6D4, 1); dl2.position.set(-100,-50,-100); this.scene.add(dl2);
+    this.scene.add(new THREE.AmbientLight(0x111133, 2));
+    const dl1 = new THREE.DirectionalLight(0x7C3AED, 1.5); dl1.position.set(100,100,50); this.scene.add(dl1);
+    const dl2 = new THREE.DirectionalLight(0x06B6D4, 0.8); dl2.position.set(-100,-50,-100); this.scene.add(dl2);
 
     this._buildStars();
     this._buildNebula();

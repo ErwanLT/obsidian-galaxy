@@ -260,16 +260,18 @@ export function createLabel(text, position, color = '#ffffff', fontSize = 48) {
   canvas.height = 128;
 
   ctx.clearRect(0, 0, 512, 128);
-  ctx.font = `${fontSize}px Outfit, sans-serif`;
-  ctx.fillStyle = color;
+  ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Glow effect
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 20;
+  // 1. Draw a dark semi-transparent outline first for contrast
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+  ctx.lineWidth = 10;
+  ctx.strokeText(text, 256, 64);
+
+  // 2. Fill the text on top
+  ctx.fillStyle = color;
   ctx.fillText(text, 256, 64);
-  ctx.shadowBlur = 0;
 
   const texture = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({
