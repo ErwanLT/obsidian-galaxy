@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: obsidian-back
+
+obsidian:
+  vault-path: /Users/erwanletutour/Documents/Obsidian Vault
+
+server:
+  port: 8080
