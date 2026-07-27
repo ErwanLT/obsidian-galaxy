@@ -7,10 +7,22 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export class GalaxyRenderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.w = window.innerWidth;
-    this.h = window.innerHeight;
+    this._measure();
     this._setup();
     window.addEventListener('resize', () => this._resize());
+  }
+
+  /**
+   * Dimensions du viewport, garanties finies et non nulles.
+   *
+   * `window.innerWidth/innerHeight` peuvent valoir 0 au tout début du cycle
+   * de vie de la page (et dans certains contextes embarqués) : le ratio
+   * devenait alors 0/0 = NaN, ce qui contaminait la matrice de projection et
+   * figeait toute la scène.
+   */
+  _measure() {
+    this.w = Math.max(1, window.innerWidth  || this.canvas.clientWidth  || 1280);
+    this.h = Math.max(1, window.innerHeight || this.canvas.clientHeight || 720);
   }
 
   _setup() {
@@ -47,10 +59,52 @@ export class GalaxyRenderer {
 
     this._buildStars();
     this._buildNebula();
+    this._buildDistantGalaxies();
+  }
+
+  /**
+   * Galaxies lointaines : de simples sprites floutés très loin de la scène.
+   * Elles donnent une échelle au vide — sans elles le fond n'est qu'un
+   * semis d'étoiles uniforme et on perd toute sensation de profondeur.
+   */
+  _buildDistantGalaxies() {
+    const tex = this._makeGalaxyTexture();
+    const specs = [
+      { x: -1500, y:  620, z: -1100, s: 340, rot: 0.5,  o: 0.5,  c: 0xC4B5FD },
+      { x:  1650, y: -480, z:  -900, s: 260, rot: -0.8, o: 0.42, c: 0xA5F3FC },
+      { x: -1250, y: -700, z:   950, s: 200, rot: 1.1,  o: 0.34, c: 0xFBCFE8 },
+      { x:  1400, y:  760, z:   800, s: 300, rot: -0.3, o: 0.3,  c: 0xDDD6FE },
+      { x:   250, y: -900, z: -1700, s: 220, rot: 0.9,  o: 0.28, c: 0xBFDBFE },
+    ];
+    specs.forEach(d => {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, color: d.c, transparent: true, opacity: d.o,
+        depthWrite: false, blending: THREE.AdditiveBlending, rotation: d.rot,
+      }));
+      sprite.position.set(d.x, d.y, d.z);
+      sprite.scale.set(d.s, d.s * 0.42, 1);   // aplati : vue de trois-quarts
+      this.scene.add(sprite);
+    });
+  }
+
+  /** Texture procédurale : noyau brillant qui s'estompe vers les bords. */
+  _makeGalaxyTexture() {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0.00, 'rgba(255,255,255,1)');
+    g.addColorStop(0.12, 'rgba(255,255,255,0.75)');
+    g.addColorStop(0.35, 'rgba(200,180,255,0.30)');
+    g.addColorStop(0.65, 'rgba(150,140,220,0.10)');
+    g.addColorStop(1.00, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
   }
 
   _buildStars() {
-    const N = 9000;
+    const N = 14000;
     const pos = new Float32Array(N * 3);
     const col = new Float32Array(N * 3);
     const sz  = new Float32Array(N);
@@ -71,17 +125,26 @@ export class GalaxyRenderer {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
-    const mat = new THREE.PointsMaterial({ size:1.4, sizeAttenuation:true, vertexColors:true, transparent:true, opacity:.9 });
+    // Additif : les étoiles se superposent au lieu de se masquer, ce qui
+    // densifie visuellement le fond sans ajouter de géométrie.
+    const mat = new THREE.PointsMaterial({
+      size: 1.7, sizeAttenuation: true, vertexColors: true,
+      transparent: true, opacity: .95, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
     this.stars = new THREE.Points(geo, mat);
     this.scene.add(this.stars);
   }
 
   _buildNebula() {
+    // Rayons largement supérieurs aux distances de caméra usuelles (~300).
+    // Avec des nuages de 200-360 unités, la caméra passait à l'intérieur et
+    // on voyait le bord franc de la sphère traverser l'écran.
     const clouds = [
-      { color:0x3b0764, r:360, x:0,    y:0,   z:0,    o:.055 },
-      { color:0x0c4a6e, r:270, x:170,  y:-70, z:-220, o:.045 },
-      { color:0x4c1d95, r:200, x:-220, y:50,  z:120,  o:.065 },
-      { color:0x0e7490, r:190, x:90,   y:90,  z:210,  o:.035 },
+      { color:0x3b0764, r:1500, x:0,    y:0,    z:0,    o:.055 },
+      { color:0x0c4a6e, r:1150, x:700,  y:-300, z:-900, o:.05  },
+      { color:0x4c1d95, r:1000, x:-900, y:200,  z:500,  o:.06  },
+      { color:0x0e7490, r:900,  x:400,  y:400,  z:850,  o:.04  },
     ];
     clouds.forEach(d => {
       const m = new THREE.Mesh(
@@ -94,8 +157,7 @@ export class GalaxyRenderer {
   }
 
   _resize() {
-    this.w = window.innerWidth;
-    this.h = window.innerHeight;
+    this._measure();
     this.camera.aspect = this.w / this.h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(this.w, this.h);
@@ -113,6 +175,16 @@ export class GalaxyRenderer {
     const startTgt = this.controls.target.clone();
     const endPos   = new THREE.Vector3(pos.x, pos.y, pos.z);
     const endTgt   = new THREE.Vector3(look.x, look.y, look.z);
+
+    // Une seule coordonnée non finie suffit à corrompre définitivement la
+    // caméra : OrbitControls la repropage à chaque frame et la scène ne
+    // revient jamais. Mieux vaut ignorer le déplacement.
+    if (!Number.isFinite(endPos.x + endPos.y + endPos.z) ||
+        !Number.isFinite(endTgt.x + endTgt.y + endTgt.z)) {
+      console.warn('[flyTo] cible non finie, déplacement ignoré', { pos, look });
+      if (cb) cb();
+      return;
+    }
     const t0 = performance.now();
 
     const tick = (now) => {

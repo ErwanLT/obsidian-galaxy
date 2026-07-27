@@ -61,3 +61,12 @@ export const TYPE_LABEL = {
   [VisualType.PLANET]:       'Planète',
   [VisualType.MOON]:         'Lune',
 };
+
+/** Couleur d'accent par type — reprise dans le HUD (pastilles, légende,
+ *  badges) et dans les labels 3D pour que les deux se répondent. */
+export const TYPE_COLOR = {
+  [VisualType.GALAXY]:       '#A78BFA',
+  [VisualType.SOLAR_SYSTEM]: '#22D3EE',
+  [VisualType.PLANET]:       '#FBBF24',
+  [VisualType.MOON]:         '#34D399',
+};

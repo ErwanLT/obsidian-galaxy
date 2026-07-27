@@ -6,9 +6,12 @@ import * as THREE from 'three';
 
 export const COLORS = {
   galaxy: [0x7C3AED, 0x8B5CF6, 0xA78BFA, 0x6D28D9, 0x5B21B6, 0x4C1D95],
-  solarSystem: [0x06B6D4, 0x0891B2, 0x22D3EE, 0x0E7490, 0x0284C7, 0x0369A1],
+  // Cyans saturés de valeur moyenne : les teintes sombres (0x0E7490,
+  // 0x0369A1) ressortaient en gris-bleu terne une fois éclairées.
+  solarSystem: [0x06B6D4, 0x0EA5E9, 0x22D3EE, 0x14B8A6, 0x38BDF8, 0x2DD4BF],
   planet: [0xF59E0B, 0xEF4444, 0x10B981, 0xF97316, 0xEC4899, 0x84CC16],
-  moon: [0x94A3B8, 0xCBD5E1, 0xA1A1AA, 0xB0B0B0, 0xD4D4D4, 0x9CA3AF],
+  // Teintes vertes : cohérentes avec la pastille « Lune / Note » de la légende.
+  moon: [0x34D399, 0x10B981, 0x6EE7B7, 0x059669, 0x2DD4BF, 0x14B8A6],
 };
 
 function pickColor(arr, idx) {
@@ -16,7 +19,51 @@ function pickColor(arr, idx) {
 }
 
 /**
- * Build a Galaxy mesh — large glowing sphere with particle ring
+ * Texture de lueur : dégradé radial opaque au centre, nul au bord.
+ * Générée une seule fois et partagée par tous les astres.
+ */
+let _glowTex = null;
+function glowTexture() {
+  if (_glowTex) return _glowTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.2, 'rgba(255,255,255,0.42)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.11)');
+  g.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  _glowTex = new THREE.CanvasTexture(c);
+  return _glowTex;
+}
+
+/**
+ * Ajoute une lueur au groupe d'un astre.
+ *
+ * Un sprite à dégradé plutôt qu'une sphère `BackSide` : la sphère a un bord
+ * franc et une luminosité constante, elle se lisait comme un disque gris posé
+ * derrière l'astre au lieu d'un halo.
+ */
+function addGlow(group, color, radius, opacity) {
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture(), color,
+    transparent: true, opacity, depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  sprite.scale.set(radius * 2, radius * 2, 1);
+  group.add(sprite);
+  return sprite;
+}
+
+/**
+ * Build a Galaxy — bulbe central lumineux + disque à bras spiraux.
+ *
+ * L'ancienne version était une grosse sphère opaque : à plusieurs
+ * galaxies à l'écran elles se chevauchaient en gros blocs de couleur.
+ * Un disque de particules se lit en profondeur et laisse voir ce qui
+ * est derrière.
  */
 export function createGalaxy(scene, node, position, index) {
   const group = new THREE.Group();
@@ -24,71 +71,78 @@ export function createGalaxy(scene, node, position, index) {
   group.userData = { node, type: 'galaxy', index };
 
   const color = pickColor(COLORS.galaxy, index);
-  const size = 18 + Math.min(node.markdownCount * 0.4, 20);
+  const radius = 20 + Math.min(node.markdownCount * 0.5, 26);   // rayon du disque
+  const bulge = radius * 0.22;
+  group.userData.visualRadius = radius;
 
-  // Core sphere
-  const coreGeo = new THREE.SphereGeometry(size, 32, 32);
-  const coreMat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    emissiveIntensity: 0.6,
-    roughness: 0.3,
-    metalness: 0.2,
-    transparent: true,
-    opacity: 0.92,
-  });
-  const core = new THREE.Mesh(coreGeo, coreMat);
-  core.userData = { isCore: true };
+  // Cible de clic : sphère transparente couvrant le disque. Sans elle il
+  // faudrait viser le bulbe central au pixel près.
+  const hit = new THREE.Mesh(
+    new THREE.SphereGeometry(radius * 0.8, 12, 12),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  hit.userData = { isCore: true };
+  group.add(hit);
+
+  // Bulbe central
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(bulge * 0.7, 24, 24),
+    new THREE.MeshBasicMaterial({ color: 0xF5E9FF }),
+  );
   group.add(core);
 
-  // Glow halo (additive sprite-like layer)
-  const haloGeo = new THREE.SphereGeometry(size * 1.6, 16, 16);
-  const haloMat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.08,
-    side: THREE.BackSide,
-  });
-  const halo = new THREE.Mesh(haloGeo, haloMat);
-  group.add(halo);
+  addGlow(group, 0xFFFFFF, bulge * 2.2, 0.85);   // éclat du noyau
+  addGlow(group, color, radius * 0.9, 0.35);      // lueur diffuse du disque
 
-  // Outer halo
-  const halo2Geo = new THREE.SphereGeometry(size * 2.8, 16, 16);
-  const halo2Mat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.04,
-    side: THREE.BackSide,
-  });
-  group.add(new THREE.Mesh(halo2Geo, halo2Mat));
+  group.add(new THREE.PointLight(color, 1.4, radius * 14));
 
-  // Point light
-  const light = new THREE.PointLight(color, 1.2, size * 12);
-  group.add(light);
+  // ── Bras spiraux ──
+  const ARMS = 2;
+  const N = Math.min(1400 + node.markdownCount * 40, 5000);
+  const pos = new Float32Array(N * 3);
+  const col = new Float32Array(N * 3);
 
-  // Disc ring of particles
-  const particleCount = 600 + node.markdownCount * 3;
-  const pPos = new Float32Array(Math.min(particleCount, 1200) * 3);
-  for (let i = 0; i < pPos.length / 3; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = size * 1.3 + Math.random() * size * 2.5;
-    const spread = (Math.random() - 0.5) * size * 0.8;
-    pPos[i * 3] = Math.cos(angle) * dist;
-    pPos[i * 3 + 1] = spread * 0.2;
-    pPos[i * 3 + 2] = Math.sin(angle) * dist;
+  // En additif, le blanc sature très vite : on garde une teinte déjà
+  // colorée au centre, sinon tout le disque part en blanc laiteux.
+  const cHot = new THREE.Color(0xE9D5FF);                 // cœur, lavande clair
+  const cArm = new THREE.Color(color);                    // teinte de la galaxie
+  const cRim = new THREE.Color(0x0E7490);                 // périphérie, cyan sombre
+
+  for (let i = 0; i < N; i++) {
+    // t^0.55 concentre les particules vers le centre, comme une vraie galaxie
+    const t = Math.pow(Math.random(), 0.55);
+    const r = bulge * 0.8 + t * radius;
+
+    // Spirale logarithmique : l'angle croît avec le rayon
+    const arm = i % ARMS;
+    const angle = (arm / ARMS) * Math.PI * 2 + t * 3.1 * Math.PI;
+    // Les bras s'épaississent vers l'extérieur
+    const jitter = (Math.random() - 0.5) * (0.22 + t * 0.5);
+    const a = angle + jitter;
+    const rr = r * (1 + (Math.random() - 0.5) * 0.14);
+
+    pos[i * 3]     = Math.cos(a) * rr;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * radius * 0.09 * (1 - t * 0.55);
+    pos[i * 3 + 2] = Math.sin(a) * rr;
+
+    // Le cœur clair est confiné aux 15 % centraux — au-delà, la couleur
+    // de la galaxie domine puis se refroidit vers le cyan.
+    const c = t < 0.15
+      ? cHot.clone().lerp(cArm, t / 0.15)
+      : cArm.clone().lerp(cRim, (t - 0.15) / 0.85);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
   }
-  const pGeo = new THREE.BufferGeometry();
-  pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-  const pMat = new THREE.PointsMaterial({
-    color,
-    size: 0.8,
-    transparent: true,
-    opacity: 0.7,
-    sizeAttenuation: true,
-  });
-  const particles = new THREE.Points(pGeo, pMat);
-  particles.userData.isDisc = true;
-  group.add(particles);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const disc = new THREE.Points(geo, new THREE.PointsMaterial({
+    size: 1.25, sizeAttenuation: true, vertexColors: true,
+    transparent: true, opacity: 0.7, depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  }));
+  disc.userData.isDisc = true;
+  group.add(disc);
 
   scene.add(group);
   return group;
@@ -104,45 +158,39 @@ export function createSolarSystem(scene, node, position, index) {
 
   const color = pickColor(COLORS.solarSystem, index);
   const size = 8 + Math.min(node.markdownCount * 0.3, 12);
+  group.userData.visualRadius = size * 2.6;   // anneau + lueur
 
-  // Star-like core
+  // Cœur d'étoile : émissif fort, il doit paraître être sa propre source
+  // de lumière et non une bille éclairée de l'extérieur.
   const coreGeo = new THREE.SphereGeometry(size, 32, 32);
   const coreMat = new THREE.MeshStandardMaterial({
     color,
     emissive: color,
-    emissiveIntensity: 0.8,
-    roughness: 0.1,
+    // Émissif modéré : au-delà de ~0.5, le tonemapping ACES fait virer
+    // l'astre au blanc et on perd le codage par couleur.
+    emissiveIntensity: 0.4,
+    roughness: 0.5,
     metalness: 0.0,
   });
   const core = new THREE.Mesh(coreGeo, coreMat);
   core.userData = { isCore: true };
   group.add(core);
 
-  // Halo
-  const haloGeo = new THREE.SphereGeometry(size * 2, 16, 16);
-  const haloMat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.07,
-    side: THREE.BackSide,
-  });
-  group.add(new THREE.Mesh(haloGeo, haloMat));
+  addGlow(group, color, size * 2.6, 0.75);
 
-  // Saturn-like ring
-  const ringGeo = new THREE.RingGeometry(size * 1.5, size * 2.5, 64);
-  const ringMat = new THREE.MeshBasicMaterial({
-    color,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.25,
-  });
-  const ring = new THREE.Mesh(ringGeo, ringMat);
+  // Anneau fin et lumineux plutôt qu'un large disque translucide
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(size * 1.55, size * 1.95, 96),
+    new THREE.MeshBasicMaterial({
+      color, side: THREE.DoubleSide,
+      transparent: true, opacity: 0.9, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
   ring.rotation.x = Math.PI / 2.5;
   group.add(ring);
 
-  // Light
-  const light = new THREE.PointLight(color, 0.8, size * 15);
-  group.add(light);
+  group.add(new THREE.PointLight(color, 1.1, size * 16));
 
   scene.add(group);
   return group;
@@ -158,6 +206,7 @@ export function createPlanet(scene, node, position, index) {
 
   const color = pickColor(COLORS.planet, index);
   const size = 4 + Math.min(node.markdownCount * 0.5, 8);
+  group.userData.visualRadius = size * 1.8;   // atmosphère + anneau éventuel
 
   // Planet sphere with texture-like variation
   const geo = new THREE.SphereGeometry(size, 32, 32);
@@ -172,15 +221,7 @@ export function createPlanet(scene, node, position, index) {
   mesh.userData = { isCore: true };
   group.add(mesh);
 
-  // Atmosphere halo
-  const atmoGeo = new THREE.SphereGeometry(size * 1.2, 16, 16);
-  const atmoMat = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.1,
-    side: THREE.BackSide,
-  });
-  group.add(new THREE.Mesh(atmoGeo, atmoMat));
+  addGlow(group, color, size * 1.9, 0.45);   // atmosphère
 
   // Optional thin ring (30% chance)
   if (Math.random() < 0.3) {
@@ -210,18 +251,23 @@ export function createMoon(scene, node, position, index) {
 
   const color = pickColor(COLORS.moon, index);
   const size = 1.2 + Math.random() * 0.8;
+  group.userData.visualRadius = size * 2.4;   // halo compris
 
   const geo = new THREE.SphereGeometry(size, 16, 16);
   const mat = new THREE.MeshStandardMaterial({
     color,
-    roughness: 0.9,
+    roughness: 0.55,
     metalness: 0.0,
     emissive: color,
-    emissiveIntensity: 0.05,
+    emissiveIntensity: 0.55,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
   group.add(mesh);
+
+  // Lueur discrète : les lunes sont minuscules, sans elle elles
+  // disparaissent contre le fond étoilé.
+  addGlow(group, color, size * 3, 0.5);
 
   scene.add(group);
   return group;
@@ -253,7 +299,7 @@ export function createOrbit(scene, center, radius, color = 0x333366, tilt = 0) {
 /**
  * Create a glowing label sprite
  */
-export function createLabel(text, position, color = '#ffffff', fontSize = 48) {
+export function createLabel(text, position, color = '#ffffff', fontSize = 48, width = 30) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   canvas.width = 512;
@@ -281,6 +327,7 @@ export function createLabel(text, position, color = '#ffffff', fontSize = 48) {
   });
   const sprite = new THREE.Sprite(mat);
   sprite.position.copy(position);
-  sprite.scale.set(30, 8, 1);
+  // On conserve le ratio du canvas (512×128) pour ne pas déformer le texte.
+  sprite.scale.set(width, width / 4, 1);
   return sprite;
 }

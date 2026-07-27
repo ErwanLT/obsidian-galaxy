@@ -11,7 +11,47 @@
 </head>
 <body>
 
-  <!-- Loading screen -->
+  <!-- ══ Icon sprite ══════════════════════════════════════════════════════ -->
+  <svg class="icon-sprite" aria-hidden="true">
+    <defs>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>
+      </symbol>
+      <symbol id="i-zoom-in" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21M8 11h6M11 8v6"/>
+      </symbol>
+      <symbol id="i-zoom-out" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21M8 11h6"/>
+      </symbol>
+      <symbol id="i-tag" viewBox="0 0 24 24">
+        <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 2.8 12V4.8A2 2 0 0 1 4.8 2.8H12a2 2 0 0 1 1.4.6l7.2 7.2a2 2 0 0 1 0 2.8Z"/>
+        <circle cx="7.5" cy="7.5" r="1.4"/>
+      </symbol>
+      <symbol id="i-orbit" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3"/>
+        <ellipse cx="12" cy="12" rx="10" ry="4.5"/>
+        <ellipse cx="12" cy="12" rx="10" ry="4.5" transform="rotate(60 12 12)"/>
+      </symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24">
+        <path d="M9 3H3v6M15 3h6v6M15 21h6v-6M9 21H3v-6"/>
+      </symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24">
+        <path d="M19 12H5M11 18l-6-6 6-6"/>
+      </symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24">
+        <path d="M5 12h14M13 6l6 6-6 6"/>
+      </symbol>
+      <symbol id="i-close" viewBox="0 0 24 24">
+        <path d="M18 6 6 18M6 6l12 12"/>
+      </symbol>
+      <symbol id="i-target" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/>
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- ══ Loading ══════════════════════════════════════════════════════════ -->
   <div id="loading-screen">
     <div class="loading-content">
       <div class="loading-logo">
@@ -35,15 +75,17 @@
     </div>
   </div>
 
-  <!-- Canvas 3D -->
+  <!-- ══ Canvas 3D ════════════════════════════════════════════════════════ -->
   <canvas id="galaxy-canvas"></canvas>
+  <div id="scene-vignette" aria-hidden="true"></div>
 
-  <!-- HUD -->
+  <!-- ══ HUD ══════════════════════════════════════════════════════════════ -->
   <div id="hud" class="hidden">
 
+    <!-- ── Header (elevation 2) ── -->
     <header id="hud-header">
-      <div class="hud-logo">
-        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <div class="hud-brand">
+        <svg class="hud-brand-mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
           <circle cx="16" cy="16" r="14" stroke="url(#hg1)" stroke-width="1.5"/>
           <circle cx="16" cy="16" r="4" fill="url(#hg1)"/>
           <ellipse cx="16" cy="16" rx="14" ry="5" stroke="url(#hg2)" stroke-width="1" opacity="0.6"/>
@@ -56,54 +98,108 @@
             </linearGradient>
           </defs>
         </svg>
-        <span>Obsidian Galaxy</span>
+        <span class="hud-brand-name">Obsidian&nbsp;Galaxy</span>
       </div>
-      <nav id="breadcrumb"></nav>
-      <div class="hud-controls">
-        <button class="btn-icon" id="btn-back" title="Retour">← Retour</button>
-        <button class="btn-icon" id="btn-reset" title="Univers">🌌</button>
-        <button class="btn-icon" id="btn-labels" title="Labels">🏷</button>
+
+      <span class="hud-divider" aria-hidden="true"></span>
+
+      <nav id="breadcrumb" aria-label="Fil d'Ariane"></nav>
+
+      <div class="hud-actions">
+        <button class="btn-ghost" id="btn-search" title="Rechercher une note (⌘K)" aria-label="Rechercher">
+          <svg class="ico"><use href="#i-search"/></svg>
+        </button>
+        <button class="btn-ghost" id="btn-fullscreen" title="Plein écran (F)" aria-label="Plein écran">
+          <svg class="ico"><use href="#i-expand"/></svg>
+        </button>
       </div>
     </header>
 
-    <!-- Left floating controls (Mockup style) -->
+    <!-- ── Left toolbar (elevation 1) ── -->
     <div id="left-toolbar">
-      <button class="btn-tool" id="btn-tool-zoom-in" title="Zoom In">＋</button>
-      <button class="btn-tool" id="btn-tool-zoom-out" title="Zoom Out">－</button>
-      <button class="btn-tool" id="btn-tool-labels" title="Labels">🏷</button>
+      <button class="btn-tool" id="btn-tool-zoom-in" title="Zoom avant" aria-label="Zoom avant">
+        <svg class="ico"><use href="#i-zoom-in"/></svg>
+      </button>
+      <button class="btn-tool" id="btn-tool-zoom-out" title="Zoom arrière" aria-label="Zoom arrière">
+        <svg class="ico"><use href="#i-zoom-out"/></svg>
+      </button>
+      <span class="tool-sep" aria-hidden="true"></span>
+      <button class="btn-tool" id="btn-tool-labels" title="Afficher / masquer les noms (L)" aria-label="Basculer les noms">
+        <svg class="ico"><use href="#i-tag"/></svg>
+      </button>
+      <button class="btn-tool" id="btn-tool-recenter" title="Recentrer la vue (C)" aria-label="Recentrer">
+        <svg class="ico"><use href="#i-target"/></svg>
+      </button>
     </div>
 
-    <!-- Info panel (right) -->
-    <aside id="info-panel" class="panel-hidden">
+    <!-- ── Info panel (elevation 3 — focus) ── -->
+    <aside id="info-panel" class="panel-hidden" aria-live="polite">
       <div class="panel-inner">
+        <button class="panel-close" id="btn-close-panel" title="Fermer (Échap)" aria-label="Fermer">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
+
         <div id="info-badge"></div>
         <h2 id="info-name"></h2>
         <p id="info-path"></p>
+
         <div id="info-stats"></div>
-        <div id="info-children"></div>
-        <button id="btn-enter" class="btn-enter" style="display:none">Entrer dans ce système →</button>
+
+        <div class="panel-section" id="info-children-section">
+          <h3 class="panel-section-title" id="info-children-title">Contenu</h3>
+          <div id="info-children"></div>
+        </div>
+
+        <button id="btn-enter" class="btn-enter" style="display:none">
+          <span>Entrer dans ce système</span>
+          <svg class="ico"><use href="#i-arrow-right"/></svg>
+        </button>
       </div>
     </aside>
 
-    <!-- Legend -->
+    <!-- ── Legend (elevation 1) ── -->
     <div id="legend">
-      <div class="leg-item"><span class="leg-dot" style="background:#8B5CF6;box-shadow:0 0 6px #8B5CF6"></span>Galaxie</div>
-      <div class="leg-item"><span class="leg-dot" style="background:#06B6D4;box-shadow:0 0 6px #06B6D4"></span>Système solaire</div>
-      <div class="leg-item"><span class="leg-dot" style="background:#F59E0B;box-shadow:0 0 6px #F59E0B"></span>Planète</div>
-      <div class="leg-item"><span class="leg-dot" style="background:#10B981;box-shadow:0 0 6px #10B981"></span>Lune / Note</div>
+      <h3 class="legend-title">Légende</h3>
+      <div class="leg-item"><span class="leg-dot" data-t="galaxy"></span>Galaxie</div>
+      <div class="leg-item"><span class="leg-dot" data-t="solar-system"></span>Système solaire</div>
+      <div class="leg-item"><span class="leg-dot" data-t="planet"></span>Planète</div>
+      <div class="leg-item"><span class="leg-dot" data-t="moon"></span>Lune / Note</div>
     </div>
 
-    <!-- Controls hint -->
+    <!-- ── Bottom-right cluster (elevation 2) ── -->
+    <div id="nav-cluster">
+      <button class="btn-round" id="btn-back" title="Retour (Retour arrière)" aria-label="Retour">
+        <svg class="ico"><use href="#i-arrow-left"/></svg>
+      </button>
+      <button class="btn-round" id="btn-reset" title="Revenir à l'univers (R)" aria-label="Revenir à l'univers">
+        <svg class="ico"><use href="#i-orbit"/></svg>
+      </button>
+    </div>
+
+    <!-- ── Hint (elevation 0 — pure text) ── -->
     <div id="controls-hint">
-      <span>🖱 Drag — Rotation</span>
-      <span>⚙ Scroll — Zoom</span>
-      <span>👆 Clic — Infos</span>
-      <span>👆👆 Double-clic — Entrer</span>
+      <span><kbd>Glisser</kbd> Pivoter</span>
+      <span><kbd>Molette</kbd> Zoomer</span>
+      <span><kbd>Clic</kbd> Détails</span>
+      <span><kbd>Double-clic</kbd> Entrer</span>
     </div>
 
   </div>
 
-  <!-- Tooltip -->
+  <!-- ══ Search palette ═══════════════════════════════════════════════════ -->
+  <div id="search-overlay" class="hidden">
+    <div id="search-box">
+      <div class="search-field">
+        <svg class="ico search-ico"><use href="#i-search"/></svg>
+        <input id="search-input" type="text" placeholder="Rechercher un dossier ou une note…"
+               autocomplete="off" spellcheck="false" />
+        <kbd class="search-esc">Échap</kbd>
+      </div>
+      <div id="search-results"></div>
+    </div>
+  </div>
+
+  <!-- ══ Tooltip ══════════════════════════════════════════════════════════ -->
   <div id="tooltip"></div>
 
   <script type="module" src="/src/main.js"></script>

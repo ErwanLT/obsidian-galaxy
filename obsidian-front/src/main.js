@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { fetchUniverse, VisualType, TYPE_EMOJI, TYPE_LABEL } from './universe.js';
+import { fetchUniverse, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
 import { createGalaxy, createSolarSystem, createPlanet, createMoon, createOrbit, createLabel } from './objects.js';
 
@@ -32,14 +32,32 @@ const infoName = document.getElementById('info-name');
 const infoPath = document.getElementById('info-path');
 const infoStats = document.getElementById('info-stats');
 const infoChildren = document.getElementById('info-children');
+const infoChildrenSection = document.getElementById('info-children-section');
 const btnEnter = document.getElementById('btn-enter');
 const btnBack = document.getElementById('btn-back');
 const btnReset = document.getElementById('btn-reset');
-const btnLabels = document.getElementById('btn-labels');
+const btnClosePanel = document.getElementById('btn-close-panel');
+const btnSearch = document.getElementById('btn-search');
+const btnFullscreen = document.getElementById('btn-fullscreen');
 const breadcrumb = document.getElementById('breadcrumb');
 const tooltip = document.getElementById('tooltip');
+const searchOverlay = document.getElementById('search-overlay');
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+/** Échappe le HTML — les noms de notes viennent du disque de l'utilisateur. */
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+/** Pastille de couleur correspondant au type d'astre. */
+function dot(visualType, cls = 'child-dot') {
+  return `<span class="${cls}" style="background:${TYPE_COLOR[visualType] || '#fff'}"></span>`;
+}
 
 function setLoadingProgress(pct, statusText) {
   if (loadingFill) loadingFill.style.width = `${pct}%`;
@@ -62,22 +80,31 @@ function hideLoading() {
 // ─── Layout helpers ───────────────────────────────────────────────────────────
 
 /**
- * Fibonacci sphere layout for galaxies at root level
+ * Disposition des galaxies racine en disque (spirale de Fermat).
+ *
+ * Remplace une sphère de Fibonacci : celle-ci plaçait les deux premières
+ * galaxies aux pôles, soit exactement sur l'axe vertical (x = z = 0), donc
+ * superposées à l'écran dès que le vault comptait peu de dossiers racine.
+ * Un disque garde aussi la lecture « carte stellaire » vue en plongée.
  */
-function fibonacciSphere(n, radius) {
-  const positions = [];
+function discLayout(n) {
+  if (n === 0) return [];
+  if (n === 1) return [new THREE.Vector3(0, 0, 0)];
+
+  // Espacement voisin ≈ radius/√n ; on veut ~110 unités entre deux
+  // galaxies, dont le rayon peut atteindre 46.
+  const radius = Math.max(150, 110 * Math.sqrt(n));
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (i / (n - 1)) * 2;
-    const r = Math.sqrt(1 - y * y);
-    const theta = goldenAngle * i;
-    positions.push(new THREE.Vector3(
-      r * Math.cos(theta) * radius,
-      y * radius * 0.4,
-      r * Math.sin(theta) * radius,
-    ));
-  }
-  return positions;
+
+  return Array.from({ length: n }, (_, i) => {
+    const r = radius * Math.sqrt((i + 0.5) / n);
+    const a = goldenAngle * i;
+    return new THREE.Vector3(
+      Math.cos(a) * r,
+      Math.sin(i * 2.4) * radius * 0.07,   // relief léger, déterministe
+      Math.sin(a) * r,
+    );
+  });
 }
 
 /**
@@ -115,6 +142,30 @@ function orbitLayout(n, minR, maxR) {
 
 // ─── Scene building ───────────────────────────────────────────────────────────
 
+/**
+ * Crée le label d'un astre et le rattache à son objet.
+ *
+ * Le lien explicite (`owner`) est indispensable : la boucle d'animation
+ * appariait auparavant labels et objets par position dans les tableaux, ce
+ * qui décalait chaque nom d'un cran dès que la vue contenait un astre
+ * central non cliquable.
+ */
+function addLabel(obj, node, dy, fontSize, width) {
+  if (!showLabels) return;
+  const p = obj.position;
+  const sprite = createLabel(
+    node.name,
+    new THREE.Vector3(p.x, p.y + dy, p.z),
+    TYPE_COLOR[node.visualType],
+    fontSize,
+    width,
+  );
+  sprite.userData.owner = obj;
+  sprite.userData.dy = dy;
+  renderer.scene.add(sprite);
+  labelObjects.push(sprite);
+}
+
 function clearScene() {
   currentObjects.forEach(o => renderer.scene.remove(o));
   labelObjects.forEach(o => renderer.scene.remove(o));
@@ -136,7 +187,7 @@ function buildRootView(universeData) {
   currentNode = null;
 
   const galaxies = universeData.children;
-  const positions = fibonacciSphere(galaxies.length, 160);
+  const positions = discLayout(galaxies.length);
 
   galaxies.forEach((node, i) => {
     const pos = positions[i];
@@ -146,14 +197,7 @@ function buildRootView(universeData) {
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
 
-    // Label
-    if (showLabels) {
-      const labelPos = new THREE.Vector3(pos.x, pos.y + 30, pos.z);
-      const emoji = TYPE_EMOJI[node.visualType] || '';
-      const sprite = createLabel(`${emoji} ${node.name}`, labelPos, '#C4B5FD', 42);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 42, 42, 58);
 
     currentObjects.push(obj);
   });
@@ -195,13 +239,7 @@ function buildGalaxyView(galaxyNode) {
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0x4C1D95, 0);
     orbitObjects.push(orbit);
 
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 18, pos.z);
-      const emoji = TYPE_EMOJI[node.visualType] || '';
-      const sprite = createLabel(`${emoji} ${node.name}`, lp, '#67E8F9', 38);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 24, 38, 40);
 
     currentObjects.push(obj);
   });
@@ -217,12 +255,7 @@ function buildGalaxyView(galaxyNode) {
     obj.userData.baseZ = pos.z;
     obj.userData.orbitRadius = pos.length();
     obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 5, pos.z);
-      const sprite = createLabel(node.name, lp, '#A1A1AA', 30);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 8, 30, 22);
     currentObjects.push(obj);
   });
 
@@ -263,13 +296,7 @@ function buildSolarSystemView(ssNode) {
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0x0891B2, 0.05 * i);
     orbitObjects.push(orbit);
 
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 12, pos.z);
-      const emoji = TYPE_EMOJI[node.visualType] || '';
-      const sprite = createLabel(`${emoji} ${node.name}`, lp, '#FCD34D', 34);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 16, 34, 30);
 
     currentObjects.push(obj);
   });
@@ -285,12 +312,7 @@ function buildSolarSystemView(ssNode) {
     obj.userData.baseZ = pos.z;
     obj.userData.orbitRadius = pos.length();
     obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 4, pos.z);
-      const sprite = createLabel(node.name, lp, '#9CA3AF', 28);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 7, 28, 20);
     currentObjects.push(obj);
   });
 
@@ -328,13 +350,7 @@ function buildPlanetView(planetNode) {
     obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
     const orbit = createOrbit(renderer.scene, center, pos.length(), 0xF59E0B, 0.1 * i);
     orbitObjects.push(orbit);
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 8, pos.z);
-      const emoji = TYPE_EMOJI[node.visualType] || '';
-      const sprite = createLabel(`${emoji} ${node.name}`, lp, '#FCD34D', 30);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 12, 30, 24);
     currentObjects.push(obj);
   });
 
@@ -349,17 +365,100 @@ function buildPlanetView(planetNode) {
     obj.userData.baseZ = pos.z;
     obj.userData.orbitRadius = pos.length();
     obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    if (showLabels) {
-      const lp = new THREE.Vector3(pos.x, pos.y + 3, pos.z);
-      const sprite = createLabel(node.name, lp, '#CBD5E1', 26);
-      renderer.scene.add(sprite);
-      labelObjects.push(sprite);
-    }
+    addLabel(obj, node, 6, 26, 18);
     currentObjects.push(obj);
   });
 
   updateBreadcrumb();
   updateBackButtonState();
+}
+
+// ─── Cadrage caméra ───────────────────────────────────────────────────────────
+
+/**
+ * Boîte englobante horizontale de la vue courante : centre et rayon.
+ *
+ * On mesure le centre plutôt que de viser l'origine, car la disposition
+ * en spirale de Fermat n'est pas symétrique — avec quatre galaxies, son
+ * barycentre est nettement décalé et la dernière sortait du cadre.
+ */
+function viewBounds() {
+  if (currentObjects.length === 0) return { cx: 0, cz: 0, radius: 60 };
+
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  currentObjects.forEach(o => {
+    const own = o.userData.visualRadius ?? 0;
+    minX = Math.min(minX, o.position.x - own);
+    maxX = Math.max(maxX, o.position.x + own);
+    minZ = Math.min(minZ, o.position.z - own);
+    maxZ = Math.max(maxZ, o.position.z + own);
+  });
+
+  const cx = (minX + maxX) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const radius = Math.max(maxX - minX, maxZ - minZ) / 2;
+  return { cx, cz, radius: radius || 60 };
+}
+
+const CAM_ELEV = 0.34;   // hauteur relative de la caméra — vue en plongée
+const FRAME_FILL = 0.88; // fraction du cadre occupée (laisse la marge des labels)
+
+/** Position de caméra à la distance `d` du centre visé, inclinaison constante. */
+function camPosAt(cx, cz, d) {
+  return new THREE.Vector3(
+    cx,
+    d * CAM_ELEV,
+    cz + d * Math.sqrt(1 - CAM_ELEV * CAM_ELEV),
+  );
+}
+
+/**
+ * Recule la caméra juste assez pour contenir la vue.
+ *
+ * On projette réellement les astres au lieu de calculer la distance
+ * analytiquement : le plan des astres est vu en biais, donc la perspective
+ * rapproche énormément les objets du bord proche. Une formule basée sur un
+ * simple rayon laissait systématiquement sortir l'astre le plus près.
+ */
+function frameCurrentView(ms = 1000) {
+  if (!renderer) return;
+  const { cx, cz, radius } = viewBounds();
+  const target = new THREE.Vector3(cx, 0, cz);
+
+  // Points à contenir : chaque astre étendu de son rayon visuel.
+  const pts = [];
+  currentObjects.forEach(o => {
+    const r = o.userData.visualRadius ?? 0;
+    [[-r, 0, 0], [r, 0, 0], [0, 0, -r], [0, 0, r], [0, r, 0]].forEach(([dx, dy, dz]) => {
+      pts.push(new THREE.Vector3(o.position.x + dx, o.position.y + dy, o.position.z + dz));
+    });
+  });
+
+  const probe = renderer.camera.clone();
+  if (!(probe.aspect > 0)) probe.aspect = 16 / 9;
+
+  let d = Math.max(radius * 1.6, 40);
+  for (let i = 0; i < 24 && pts.length > 0; i++) {
+    probe.position.copy(camPosAt(cx, cz, d));
+    probe.lookAt(target);
+    probe.updateMatrixWorld();
+    probe.updateProjectionMatrix();
+
+    let worst = 0;
+    for (const p of pts) {
+      // z négatif en espace caméra = devant l'objectif. Un point derrière
+      // rend la projection inexploitable, on force alors un recul.
+      const local = p.clone().applyMatrix4(probe.matrixWorldInverse);
+      if (local.z > -probe.near) { worst = Infinity; break; }
+      const ndc = p.clone().project(probe);
+      worst = Math.max(worst, Math.abs(ndc.x), Math.abs(ndc.y));
+    }
+
+    if (worst <= FRAME_FILL) break;
+    d *= Number.isFinite(worst) ? Math.max(1.08, worst / FRAME_FILL) : 1.5;
+  }
+
+  renderer.flyTo(camPosAt(cx, cz, d), target, ms);
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
@@ -386,12 +485,7 @@ function enterNode(node) {
       return; // moons/files don't enter
   }
 
-  // Fly to compact overview (adjusted zoom distance +20% again)
-  renderer.flyTo(
-    { x: 0, y: 60, z: 190 },
-    { x: 0, y: 0, z: 0 },
-    1000,
-  );
+  frameCurrentView(1000);
 }
 
 function goBack() {
@@ -411,104 +505,90 @@ function goBack() {
 
   if (prev.camera) {
     renderer.flyTo(prev.camera.pos, prev.camera.target, 900);
+  } else {
+    // Entrée synthétique (venue de la recherche) : pas de caméra à restaurer.
+    frameCurrentView(900);
   }
 }
 
 function resetToRoot() {
   navigationStack = [];
   buildRootView(universe);
-  renderer.flyTo({ x: 0, y: 80, z: 220 }, { x: 0, y: 0, z: 0 }, 1200);
+  frameCurrentView(1200);
 }
 
 function updateBackButtonState() {
-  if (btnBack) {
-    if (navigationStack.length > 0) {
-      btnBack.style.opacity = '1';
-      btnBack.style.pointerEvents = 'all';
-    } else {
-      btnBack.style.opacity = '0.3';
-      btnBack.style.pointerEvents = 'none';
-    }
-  }
+  if (btnBack) btnBack.disabled = navigationStack.length === 0;
+  if (btnReset) btnReset.disabled = navigationStack.length === 0;
 }
 
 // ─── Info Panel ───────────────────────────────────────────────────────────────
+
+const MAX_CHILDREN_SHOWN = 14;
 
 function showInfoPanel(node) {
   const vt = node.visualType;
 
   if (infoBadge) {
-    infoBadge.textContent = `${TYPE_EMOJI[vt] || ''} ${TYPE_LABEL[vt] || ''}`;
-    infoBadge.className = `info-type-badge ${vt}`; // matching styling badge CSS
-    infoBadge.classList.add(vt);
+    infoBadge.textContent = TYPE_LABEL[vt] || '';
+    infoBadge.className = vt;
   }
 
   if (infoName) infoName.textContent = node.name;
   if (infoPath) infoPath.textContent = node.path || '';
 
-  // Stats
-  const childCount = node.children ? node.children.length : 0;
+  // Stats en lignes label → valeur : ça se scanne verticalement.
+  const children = node.children || [];
+  const folders = children.filter(c => c.type === 'DIRECTORY').length;
   if (infoStats) {
-    infoStats.innerHTML = `
-      <div class="stat">
-        <span class="stat-val">${node.markdownCount ?? 0}</span>
-        <span class="stat-lbl">Notes</span>
-      </div>
-      ${childCount > 0 ? `
-      <div class="stat">
-        <span class="stat-val">${childCount}</span>
-        <span class="stat-lbl">Objets</span>
-      </div>` : ''}
-      <div class="stat">
-        <span class="stat-val">${node.depth ?? 0}</span>
-        <span class="stat-lbl">Niveau</span>
-      </div>
-    `;
+    const rows = [['Notes', node.markdownCount ?? 0]];
+    if (folders > 0) rows.push(['Sous-dossiers', folders]);
+    if (children.length > 0) rows.push(['Objets en orbite', children.length]);
+    rows.push(['Profondeur', `Niveau ${node.depth ?? 0}`]);
+    infoStats.innerHTML = rows.map(([lbl, val]) => `
+      <div class="stat-row">
+        <span class="stat-lbl">${esc(lbl)}</span>
+        <span class="stat-val">${esc(val)}</span>
+      </div>`).join('');
   }
 
-  // Children list
+  // Liste du contenu, numérotée
   if (infoChildren) {
     infoChildren.innerHTML = '';
-    if (node.children && node.children.length > 0) {
-      node.children.slice(0, 12).forEach(child => {
-        const item = document.createElement('div');
-        item.className = 'child-item';
-        const dotColors = {
-          [VisualType.GALAXY]: '#8B5CF6',
-          [VisualType.SOLAR_SYSTEM]: '#06B6D4',
-          [VisualType.PLANET]: '#F59E0B',
-          [VisualType.MOON]: '#10B981',
-        };
-        const emoji = TYPE_EMOJI[child.visualType] || '';
-        item.innerHTML = `
-          <span class="child-dot" style="background:${dotColors[child.visualType] || '#fff'}"></span>
-          <span>${emoji} ${child.name}</span>
-        `;
-        item.addEventListener('click', () => {
-          if (child.type !== 'MARKDOWN_FILE') enterNode(child);
-          else showInfoPanel(child);
-        });
-        infoChildren.appendChild(item);
+    children.slice(0, MAX_CHILDREN_SHOWN).forEach((child, i) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'child-item';
+      item.title = child.name;
+      item.innerHTML = `
+        <span class="child-num">${i + 1}</span>
+        ${dot(child.visualType)}
+        <span class="child-name">${esc(child.name)}</span>
+      `;
+      item.addEventListener('click', () => {
+        if (child.type !== 'MARKDOWN_FILE') enterNode(child);
+        else showInfoPanel(child);
       });
-      if (node.children.length > 12) {
-        const more = document.createElement('div');
-        more.className = 'child-item';
-        more.style.justifyContent = 'center';
-        more.style.color = 'rgba(255,255,255,0.35)';
-        more.textContent = `+ ${node.children.length - 12} autres…`;
-        infoChildren.appendChild(more);
-      }
+      infoChildren.appendChild(item);
+    });
+    if (children.length > MAX_CHILDREN_SHOWN) {
+      const more = document.createElement('div');
+      more.className = 'child-more';
+      more.textContent = `+ ${children.length - MAX_CHILDREN_SHOWN} autres`;
+      infoChildren.appendChild(more);
     }
   }
 
-  // Enter button
+  // On masque toute la section quand il n'y a rien à lister, plutôt
+  // que de laisser un titre orphelin.
+  if (infoChildrenSection) {
+    infoChildrenSection.style.display = children.length > 0 ? '' : 'none';
+  }
+
   if (btnEnter) {
-    if (vt !== VisualType.MOON) {
-      btnEnter.style.display = 'block';
-      btnEnter.onclick = () => enterNode(node);
-    } else {
-      btnEnter.style.display = 'none';
-    }
+    const canEnter = vt !== VisualType.MOON && children.length > 0;
+    btnEnter.style.display = canEnter ? 'flex' : 'none';
+    btnEnter.onclick = canEnter ? () => enterNode(node) : null;
   }
 
   if (infoPanel) {
@@ -531,42 +611,35 @@ function updateBreadcrumb() {
   if (!breadcrumb) return;
   breadcrumb.innerHTML = '';
 
-  const addItem = (label, depth, handler) => {
+  const addItem = (label, visualType, handler) => {
     if (breadcrumb.children.length > 0) {
       const sep = document.createElement('span');
       sep.className = 'bc-sep';
-      sep.textContent = '›';
+      sep.textContent = '/';
       breadcrumb.appendChild(sep);
     }
-    const item = document.createElement('span');
+    const item = document.createElement('button');
+    item.type = 'button';
     item.className = `bc-item${handler ? '' : ' active'}`;
-    item.textContent = label;
-    item.dataset.depth = depth;
+    item.title = label;
+    item.innerHTML = `${visualType ? dot(visualType, 'bc-dot') : ''}<span>${esc(label)}</span>`;
     if (handler) item.addEventListener('click', handler);
+    else item.disabled = true;
     breadcrumb.appendChild(item);
   };
 
-  addItem('🌌 Univers', -1, navigationStack.length > 0 ? resetToRoot : null);
+  addItem('Univers', null, navigationStack.length > 0 ? resetToRoot : null);
 
   navigationStack.forEach((entry, i) => {
-    if (entry.node) {
-      const emoji = TYPE_EMOJI[entry.node.visualType] || '';
-      addItem(
-        `${emoji} ${entry.node.name}`,
-        i,
-        () => {
-          // Navigate back to this point
-          const stepsBack = navigationStack.length - i - 1;
-          for (let s = 0; s < stepsBack; s++) goBack();
-        }
-      );
-    }
+    if (!entry.node) return;
+    addItem(entry.node.name, entry.node.visualType, () => {
+      // Remonter jusqu'à ce niveau
+      const stepsBack = navigationStack.length - i - 1;
+      for (let s = 0; s < stepsBack; s++) goBack();
+    });
   });
 
-  if (currentNode) {
-    const emoji = TYPE_EMOJI[currentNode.visualType] || '';
-    addItem(`${emoji} ${currentNode.name}`, navigationStack.length, null);
-  }
+  if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
 }
 
 // ─── Raycasting / Interaction ─────────────────────────────────────────────────
@@ -604,9 +677,8 @@ function onMouseMove(event) {
       if (renderer) renderer.domElement.style.cursor = 'pointer';
 
       const node = hoveredObject.userData.node;
-      const emoji = TYPE_EMOJI[node.visualType] || '';
       if (tooltip) {
-        tooltip.textContent = `${emoji} ${node.name}`;
+        tooltip.innerHTML = `${dot(node.visualType, 'tip-dot')}<span>${esc(node.name)}</span>`;
         tooltip.classList.add('visible');
       }
     } else {
@@ -712,14 +784,181 @@ function animateObjects(time) {
     }
   });
 
-  // Labels follow objects
-  labelObjects.forEach((sprite, i) => {
-    const obj = currentObjects.find((o, oi) => oi === i + 1 && o.userData.clickable);
-    if (obj) {
-      sprite.position.x = obj.position.x;
-      sprite.position.z = obj.position.z;
-    }
+  // Chaque label suit l'astre auquel il est rattaché
+  labelObjects.forEach(sprite => {
+    const obj = sprite.userData.owner;
+    if (!obj) return;
+    sprite.position.set(
+      obj.position.x,
+      obj.position.y + sprite.userData.dy,
+      obj.position.z,
+    );
   });
+}
+
+// ─── Recherche ────────────────────────────────────────────────────────────────
+
+let flatIndex = [];      // [{ node, ancestors }] — aplatissement de l'arbre
+let searchHits = [];
+let activeHit = 0;
+
+function buildSearchIndex(universeData) {
+  flatIndex = [];
+  const walk = (node, ancestors) => {
+    flatIndex.push({ node, ancestors });
+    (node.children || []).forEach(c => walk(c, [...ancestors, node]));
+  };
+  (universeData.children || []).forEach(c => walk(c, []));
+}
+
+function levelForDepth(depth) {
+  if (depth === 0) return 'galaxy';
+  if (depth === 1) return 'solar';
+  return 'planet';
+}
+
+function buildViewFor(node) {
+  switch (node.visualType) {
+    case VisualType.GALAXY:       buildGalaxyView(node); return true;
+    case VisualType.SOLAR_SYSTEM: buildSolarSystemView(node); return true;
+    case VisualType.PLANET:       buildPlanetView(node); return true;
+    default: return false;
+  }
+}
+
+/**
+ * Saute directement sur un nœud depuis la recherche. On reconstruit la pile
+ * de navigation à partir des ancêtres, sinon le fil d'Ariane et le bouton
+ * Retour se retrouveraient désynchronisés de la vue affichée.
+ */
+function revealNode(entry) {
+  const { node, ancestors } = entry;
+  const isFile = node.type === 'MARKDOWN_FILE';
+  // Un fichier n'a pas de vue propre : on ouvre son dossier parent.
+  const viewNode = isFile ? ancestors[ancestors.length - 1] : node;
+  const chain = isFile ? ancestors.slice(0, -1) : ancestors;
+
+  // camera: null → au retour, on recadrera sur le contenu plutôt que de
+  // restaurer une position que l'utilisateur n'a jamais occupée.
+  navigationStack = [{ node: null, camera: null, level: 'root' }];
+  chain.forEach(a => navigationStack.push({
+    node: a, camera: null, level: levelForDepth(a.depth),
+  }));
+
+  if (!viewNode || !buildViewFor(viewNode)) {
+    navigationStack = [];
+    buildRootView(universe);
+  }
+
+  updateBreadcrumb();
+  updateBackButtonState();
+  frameCurrentView(900);
+  showInfoPanel(node);   // après buildView, qui vide le panneau
+}
+
+function highlight(name, q) {
+  const i = name.toLowerCase().indexOf(q);
+  if (i < 0) return esc(name);
+  return esc(name.slice(0, i))
+    + `<mark>${esc(name.slice(i, i + q.length))}</mark>`
+    + esc(name.slice(i + q.length));
+}
+
+function setActiveHit(i) {
+  if (searchHits.length === 0) return;
+  activeHit = (i + searchHits.length) % searchHits.length;
+  [...searchResults.children].forEach((el, n) => {
+    el.classList.toggle('is-active', n === activeHit);
+  });
+  searchResults.children[activeHit]?.scrollIntoView({ block: 'nearest' });
+}
+
+function renderSearchResults(query) {
+  const q = query.trim().toLowerCase();
+  searchResults.innerHTML = '';
+  searchHits = [];
+  if (!q) return;
+
+  searchHits = flatIndex
+    .filter(e => e.node.name.toLowerCase().includes(q))
+    .sort((a, b) => {
+      // Les correspondances en début de nom d'abord, puis les noms courts.
+      const ai = a.node.name.toLowerCase().indexOf(q);
+      const bi = b.node.name.toLowerCase().indexOf(q);
+      return ai - bi || a.node.name.length - b.node.name.length;
+    })
+    .slice(0, 40);
+
+  if (searchHits.length === 0) {
+    searchResults.innerHTML =
+      `<div class="search-empty">Aucun résultat pour « ${esc(query.trim())} »</div>`;
+    return;
+  }
+
+  searchHits.forEach((entry, i) => {
+    const { node, ancestors } = entry;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'search-hit';
+    const parents = ancestors.map(a => a.name).join(' / ') || 'Univers';
+    btn.innerHTML = `
+      ${dot(node.visualType, 'search-hit-dot')}
+      <span class="search-hit-text">
+        <span class="search-hit-name">${highlight(node.name, q)}</span>
+        <span class="search-hit-path">${esc(parents)}</span>
+      </span>
+      <span class="search-hit-type">${esc(TYPE_LABEL[node.visualType] || '')}</span>
+    `;
+    btn.addEventListener('click', () => { closeSearch(); revealNode(entry); });
+    btn.addEventListener('mouseenter', () => setActiveHit(i));
+    searchResults.appendChild(btn);
+  });
+
+  setActiveHit(0);
+}
+
+function openSearch() {
+  if (!searchOverlay) return;
+  searchOverlay.classList.remove('hidden');
+  searchInput.value = '';
+  renderSearchResults('');
+  searchInput.focus();
+}
+
+function closeSearch() {
+  if (!searchOverlay) return;
+  searchOverlay.classList.add('hidden');
+}
+
+function isSearchOpen() {
+  return searchOverlay && !searchOverlay.classList.contains('hidden');
+}
+
+// ─── Contrôles de vue ─────────────────────────────────────────────────────────
+
+function zoomBy(factor) {
+  if (!renderer) return;
+  const target = renderer.controls.target;
+  const pos = renderer.camera.position;
+  const dir = new THREE.Vector3().subVectors(target, pos).normalize();
+  const dist = pos.distanceTo(target);
+  renderer.flyTo(pos.clone().addScaledVector(dir, dist * factor), target, 350);
+}
+
+function toggleLabels() {
+  showLabels = !showLabels;
+  labelObjects.forEach(l => { l.visible = showLabels; });
+  const btn = document.getElementById('btn-tool-labels');
+  if (btn) btn.classList.toggle('is-off', !showLabels);
+}
+
+function recenter() {
+  frameCurrentView(700);
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
@@ -751,9 +990,11 @@ async function init() {
     setLoadingProgress(80, "Génération de la carte stellaire…");
 
     universe = raw;
+    buildSearchIndex(universe);
 
     // Build scene
     buildRootView(universe);
+    frameCurrentView(1600);   // se joue pendant le fondu de l'écran de chargement
     setLoadingProgress(100, "Prêt !");
 
     // Show app
@@ -771,60 +1012,65 @@ async function init() {
     }
   }
 
-  // Events
+  // ── Scène ──
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('click', onClick);
 
-  if (btnReset) btnReset.addEventListener('click', resetToRoot);
-  if (btnBack) btnBack.addEventListener('click', goBack);
+  // ── Navigation ──
+  btnBack?.addEventListener('click', goBack);
+  btnReset?.addEventListener('click', resetToRoot);
+  btnClosePanel?.addEventListener('click', hideInfoPanel);
 
-  if (btnLabels) {
-    btnLabels.addEventListener('click', () => {
-      showLabels = !showLabels;
-      labelObjects.forEach(l => { l.visible = showLabels; });
-      btnLabels.style.opacity = showLabels ? '1' : '0.4';
-      const btnToolLabels = document.getElementById('btn-tool-labels');
-      if (btnToolLabels) btnToolLabels.style.opacity = showLabels ? '1' : '0.4';
-    });
-  }
+  // ── Header ──
+  btnSearch?.addEventListener('click', openSearch);
+  btnFullscreen?.addEventListener('click', toggleFullscreen);
 
-  // Left Toolbar Zoom & Label interactions
-  const btnToolZoomIn = document.getElementById('btn-tool-zoom-in');
-  const btnToolZoomOut = document.getElementById('btn-tool-zoom-out');
-  const btnToolLabels = document.getElementById('btn-tool-labels');
+  // ── Toolbar ──
+  document.getElementById('btn-tool-zoom-in')?.addEventListener('click', () => zoomBy(0.25));
+  document.getElementById('btn-tool-zoom-out')?.addEventListener('click', () => zoomBy(-0.25));
+  document.getElementById('btn-tool-labels')?.addEventListener('click', toggleLabels);
+  document.getElementById('btn-tool-recenter')?.addEventListener('click', recenter);
 
-  if (btnToolZoomIn) {
-    btnToolZoomIn.addEventListener('click', () => {
-      if (!renderer) return;
-      const target = renderer.controls.target;
-      const pos = renderer.camera.position;
-      const dir = new THREE.Vector3().subVectors(target, pos).normalize();
-      const dist = pos.distanceTo(target);
-      const newPos = pos.clone().addScaledVector(dir, dist * 0.25);
-      renderer.flyTo(newPos, target, 400);
-    });
-  }
+  // ── Recherche ──
+  searchInput?.addEventListener('input', () => renderSearchResults(searchInput.value));
+  searchInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown')      { e.preventDefault(); setActiveHit(activeHit + 1); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveHit(activeHit - 1); }
+    else if (e.key === 'Enter' && searchHits[activeHit]) {
+      e.preventDefault();
+      const entry = searchHits[activeHit];
+      closeSearch();
+      revealNode(entry);
+    }
+  });
+  // Clic en dehors de la boîte = fermeture
+  searchOverlay?.addEventListener('click', (e) => {
+    if (e.target === searchOverlay) closeSearch();
+  });
 
-  if (btnToolZoomOut) {
-    btnToolZoomOut.addEventListener('click', () => {
-      if (!renderer) return;
-      const target = renderer.controls.target;
-      const pos = renderer.camera.position;
-      const dir = new THREE.Vector3().subVectors(target, pos).normalize();
-      const dist = pos.distanceTo(target);
-      const newPos = pos.clone().addScaledVector(dir, -dist * 0.25);
-      renderer.flyTo(newPos, target, 400);
-    });
-  }
+  // ── Raccourcis clavier ──
+  window.addEventListener('keydown', (e) => {
+    if (isSearchOpen()) {
+      if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+      return;   // la palette gère ses propres flèches / Entrée
+    }
+    // Cmd/Ctrl+K ou « / » ouvrent la recherche
+    if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || e.key === '/') {
+      e.preventDefault(); openSearch(); return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-  if (btnToolLabels) {
-    btnToolLabels.addEventListener('click', () => {
-      showLabels = !showLabels;
-      labelObjects.forEach(l => { l.visible = showLabels; });
-      if (btnLabels) btnLabels.style.opacity = showLabels ? '1' : '0.4';
-      btnToolLabels.style.opacity = showLabels ? '1' : '0.4';
-    });
-  }
+    switch (e.key) {
+      case 'Escape':    hideInfoPanel(); break;
+      case 'Backspace': e.preventDefault(); goBack(); break;
+      case 'r': case 'R': resetToRoot(); break;
+      case 'l': case 'L': toggleLabels(); break;
+      case 'c': case 'C': recenter(); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+      case '+': case '=': zoomBy(0.25); break;
+      case '-':           zoomBy(-0.25); break;
+    }
+  });
 
   // Start loop
   requestAnimationFrame(loop);
