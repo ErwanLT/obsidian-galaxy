@@ -460,7 +460,13 @@ html, body {
   background: var(--surface-4); border: 1px solid var(--stroke-2);
   font-size: .76rem; color: var(--text-hi);
   backdrop-filter: var(--blur-2); box-shadow: var(--elev-2);
-  opacity: 0; transition: opacity .13s ease; max-width: 260px; white-space: nowrap;
+  opacity: 0; transition: opacity .13s ease;
+  max-width: 480px;
+}
+#tooltip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #tooltip.visible { opacity: 1; }
 .tip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
