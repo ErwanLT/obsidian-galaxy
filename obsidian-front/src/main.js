@@ -737,23 +737,54 @@ function animateObjects(time) {
   const t = (time - clock.start) * 0.001;
 
   currentObjects.forEach((obj, i) => {
-    if (!obj.userData.clickable && i === 0) return; // don't spin central obj heavily
-
     const vt = obj.userData?.node?.visualType;
+    const isClickable = obj.userData.clickable;
+
     switch (vt) {
       case VisualType.GALAXY:
-        obj.rotation.y = t * 0.02 + i * 1.2;
-        // spin particle disc faster
+        // La galaxie centrale tourne très lentement, les galaxies périphériques un peu plus vite
+        obj.rotation.y = isClickable ? (t * 0.01 + i * 1.2) : (t * 0.002);
+        
+        // Animation fluide des bras spiraux par écoulement radial
         obj.children.forEach(c => {
-          if (c.userData?.isDisc) c.rotation.y = -t * 0.03;
+          if (c.userData?.isDisc) {
+            const geo = c.geometry;
+            const positions = geo.attributes.position.array;
+            
+            const u0s = c.userData.u0s;
+            const radialSpeeds = c.userData.radialSpeeds;
+            const arms = c.userData.arms;
+            const jitters = c.userData.jitters;
+            const rJitters = c.userData.rJitters;
+            const bulge = c.userData.bulge;
+            const radius = c.userData.radius;
+
+            if (u0s && radialSpeeds && arms && jitters && rJitters) {
+              const N = u0s.length;
+              const ARMS = 2;
+              for (let j = 0; j < N; j++) {
+                // Écoulement radial : u augmente et boucle entre 0 et 1
+                const u = (u0s[j] + t * radialSpeeds[j]) % 1.0;
+                
+                // Calcul de la position le long du bras spiral
+                const r_base = bulge * 0.8 + u * radius;
+                const rr = r_base * (1 + rJitters[j]);
+                const angle = (arms[j] / ARMS) * Math.PI * 2 + u * 3.1 * Math.PI + t * 0.05 + jitters[j];
+                
+                positions[j * 3]     = Math.cos(angle) * rr;
+                positions[j * 3 + 2] = Math.sin(angle) * rr;
+              }
+              geo.attributes.position.needsUpdate = true;
+            }
+          }
         });
         break;
       case VisualType.SOLAR_SYSTEM:
-        obj.rotation.y = t * 0.04 + i * 0.7;
+        obj.rotation.y = isClickable ? (t * 0.04 + i * 0.7) : (t * 0.005);
         break;
       case VisualType.PLANET: {
-        // Orbit around center if not center obj
-        if (obj.userData.clickable) {
+        // Orbite autour du centre si l'astre est cliquable (pas au centre de la vue)
+        if (isClickable) {
           const baseAngle = obj.userData.orbitAngle ?? 0;
           const speed = 0.015 + i * 0.003;
           const angle = baseAngle + t * speed;
@@ -761,11 +792,11 @@ function animateObjects(time) {
           obj.position.x = Math.cos(angle) * r;
           obj.position.z = Math.sin(angle) * r;
         }
-        obj.rotation.y = t * 0.08;
+        obj.rotation.y = isClickable ? (t * 0.08) : (t * 0.01);
         break;
       }
       case VisualType.MOON: {
-        if (obj.userData.clickable) {
+        if (isClickable) {
           const baseAngle = obj.userData.orbitAngle ?? 0;
           const speed = 0.04 + i * 0.006;
           const angle = baseAngle + t * speed;

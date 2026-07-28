@@ -96,11 +96,17 @@ export function createGalaxy(scene, node, position, index) {
 
   group.add(new THREE.PointLight(color, 1.4, radius * 14));
 
-  // ── Bras spiraux ──
+  // ── Bras spiraux (Écoulement radial fluide) ──
   const ARMS = 2;
   const N = Math.min(1400 + node.markdownCount * 40, 5000);
   const pos = new Float32Array(N * 3);
   const col = new Float32Array(N * 3);
+
+  const u0s = new Float32Array(N);
+  const radialSpeeds = new Float32Array(N);
+  const arms = new Float32Array(N);
+  const jitters = new Float32Array(N);
+  const rJitters = new Float32Array(N);
 
   // En additif, le blanc sature très vite : on garde une teinte déjà
   // colorée au centre, sinon tout le disque part en blanc laiteux.
@@ -109,27 +115,34 @@ export function createGalaxy(scene, node, position, index) {
   const cRim = new THREE.Color(0x0E7490);                 // périphérie, cyan sombre
 
   for (let i = 0; i < N; i++) {
-    // t^0.55 concentre les particules vers le centre, comme une vraie galaxie
-    const t = Math.pow(Math.random(), 0.55);
-    const r = bulge * 0.8 + t * radius;
-
-    // Spirale logarithmique : l'angle croît avec le rayon
+    // u0 répartit les particules uniformément du centre vers la périphérie
+    const u0 = Math.random();
+    // Vitesse d'écoulement radial légèrement aléatoire pour le réalisme
+    const radialSpeed = 0.012 + Math.random() * 0.012;
     const arm = i % ARMS;
-    const angle = (arm / ARMS) * Math.PI * 2 + t * 3.1 * Math.PI;
-    // Les bras s'épaississent vers l'extérieur
-    const jitter = (Math.random() - 0.5) * (0.22 + t * 0.5);
-    const a = angle + jitter;
-    const rr = r * (1 + (Math.random() - 0.5) * 0.14);
+    // Les bras s'épaississent vers l'extérieur (jitter plus grand à grand u0)
+    const jitter = (Math.random() - 0.5) * (0.22 + u0 * 0.4);
+    const rJitter = (Math.random() - 0.5) * 0.12;
 
-    pos[i * 3]     = Math.cos(a) * rr;
-    pos[i * 3 + 1] = (Math.random() - 0.5) * radius * 0.09 * (1 - t * 0.55);
-    pos[i * 3 + 2] = Math.sin(a) * rr;
+    u0s[i] = u0;
+    radialSpeeds[i] = radialSpeed;
+    arms[i] = arm;
+    jitters[i] = jitter;
+    rJitters[i] = rJitter;
 
-    // Le cœur clair est confiné aux 15 % centraux — au-delà, la couleur
-    // de la galaxie domine puis se refroidit vers le cyan.
-    const c = t < 0.15
-      ? cHot.clone().lerp(cArm, t / 0.15)
-      : cArm.clone().lerp(cRim, (t - 0.15) / 0.85);
+    // Position initiale à t = 0
+    const r_base = bulge * 0.8 + u0 * radius;
+    const rr = r_base * (1 + rJitter);
+    const angle = (arm / ARMS) * Math.PI * 2 + u0 * 3.1 * Math.PI + jitter;
+
+    pos[i * 3]     = Math.cos(angle) * rr;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * radius * 0.09 * (1 - u0 * 0.55);
+    pos[i * 3 + 2] = Math.sin(angle) * rr;
+
+    // Le cœur clair est confiné aux 15 % centraux
+    const c = u0 < 0.15
+      ? cHot.clone().lerp(cArm, u0 / 0.15)
+      : cArm.clone().lerp(cRim, (u0 - 0.15) / 0.85);
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
   }
 
@@ -141,7 +154,16 @@ export function createGalaxy(scene, node, position, index) {
     transparent: true, opacity: 0.7, depthWrite: false,
     blending: THREE.AdditiveBlending,
   }));
-  disc.userData.isDisc = true;
+  disc.userData = {
+    isDisc: true,
+    u0s,
+    radialSpeeds,
+    arms,
+    jitters,
+    rJitters,
+    bulge,
+    radius
+  };
   group.add(disc);
 
   scene.add(group);
