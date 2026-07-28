@@ -302,22 +302,37 @@ export function createOrbit(scene, center, radius, color = 0x333366, tilt = 0) {
 export function createLabel(text, position, color = '#ffffff', fontSize = 48, width = 30) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  canvas.width = 512;
-  canvas.height = 128;
 
-  ctx.clearRect(0, 0, 512, 128);
+  // Mesurer le texte pour adapter la taille du canvas
+  ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
+  const textWidth = ctx.measureText(text).width;
+
+  // Marge pour éviter que les bords soient coupés (contour)
+  const padding = 24;
+  const canvasWidth = Math.max(512, Math.ceil(textWidth + padding));
+  const canvasHeight = 128;
+
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+
+  // Réinitialiser le contexte car changer width le remet à zéro
   ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
+
   // 1. Draw a dark semi-transparent outline first for contrast
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
   ctx.lineWidth = 10;
-  ctx.strokeText(text, 256, 64);
+  ctx.strokeText(text, cx, cy);
 
   // 2. Fill the text on top
   ctx.fillStyle = color;
-  ctx.fillText(text, 256, 64);
+  ctx.fillText(text, cx, cy);
 
   const texture = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({
@@ -327,7 +342,10 @@ export function createLabel(text, position, color = '#ffffff', fontSize = 48, wi
   });
   const sprite = new THREE.Sprite(mat);
   sprite.position.copy(position);
-  // On conserve le ratio du canvas (512×128) pour ne pas déformer le texte.
-  sprite.scale.set(width, width / 4, 1);
+
+  // Conserver le ratio du canvas pour ne pas déformer le texte
+  const spriteHeight = width / 4;
+  const spriteWidth = spriteHeight * (canvasWidth / canvasHeight);
+  sprite.scale.set(spriteWidth, spriteHeight, 1);
   return sprite;
 }

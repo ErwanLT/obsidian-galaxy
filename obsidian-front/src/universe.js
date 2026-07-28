@@ -3,7 +3,7 @@
  * Fetches vault hierarchy from obsidian-back and maps it to visual space types.
  */
 
-const API_BASE = '';
+const API_BASE = 'http://localhost:8080';
 
 export const NodeType = { DIRECTORY: 'DIRECTORY', MARKDOWN_FILE: 'MARKDOWN_FILE' };
 export const VisualType = { GALAXY: 'galaxy', SOLAR_SYSTEM: 'solar-system', PLANET: 'planet', MOON: 'moon' };
