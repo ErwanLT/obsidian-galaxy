@@ -34,6 +34,7 @@ const infoStats = document.getElementById('info-stats');
 const infoChildren = document.getElementById('info-children');
 const infoChildrenSection = document.getElementById('info-children-section');
 const btnEnter = document.getElementById('btn-enter');
+const btnOpenObsidian = document.getElementById('btn-open-obsidian');
 const btnBack = document.getElementById('btn-back');
 const btnReset = document.getElementById('btn-reset');
 const btnClosePanel = document.getElementById('btn-close-panel');
@@ -589,6 +590,16 @@ function showInfoPanel(node) {
     const canEnter = vt !== VisualType.MOON && children.length > 0;
     btnEnter.style.display = canEnter ? 'flex' : 'none';
     btnEnter.onclick = canEnter ? () => enterNode(node) : null;
+  }
+
+  if (btnOpenObsidian) {
+    const isMarkdownFile = vt === VisualType.MOON || node.type === 'MARKDOWN_FILE';
+    btnOpenObsidian.style.display = isMarkdownFile ? 'flex' : 'none';
+    btnOpenObsidian.onclick = isMarkdownFile ? () => {
+      if (node.path) {
+        window.location.href = `obsidian://open?path=${encodeURIComponent(node.path)}`;
+      }
+    } : null;
   }
 
   if (infoPanel) {

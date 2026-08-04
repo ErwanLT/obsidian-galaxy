@@ -77,6 +77,7 @@ Le projet est divisé en deux modules distincts :
 - **Zoom avant/arrière** : Utilisez la `Molette` de la souris.
 - **Sélectionner un système / astre** : Faites un `Clic` simple sur un objet céleste pour ouvrir son panneau d'informations (statistiques, nombre de notes enfants, chemin d'accès local). La caméra zoomera doucement sur l'astre sélectionné.
 - **Entrer dans un sous-niveau** : Faites un `Double-Clic` sur une galaxie, une étoile ou une planète (ou cliquez sur le bouton **Entrer** dans le panneau latéral) pour voyager à l'intérieur de ce sous-dossier.
+- **Ouvrir une note dans Obsidian** : Lorsque vous cliquez sur une lune (note Markdown), un bouton **Ouvrir dans Obsidian** s'affiche dans le panneau latéral pour ouvrir directement le fichier dans votre application Obsidian locale (via le protocole `obsidian://open?path=...`).
 - **Retourner en arrière** : Utilisez le fil d'Ariane (**Breadcrumb**) en haut à gauche pour revenir au niveau parent, ou cliquez sur le bouton `← Retour`.
 
 ---

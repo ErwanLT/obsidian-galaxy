@@ -329,6 +329,18 @@ html, body {
 .btn-enter:active { transform: scale(.985); }
 .btn-enter .ico { width: 15px; height: 15px; }
 
+.btn-open-obsidian {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%; margin-top: 14px; padding: 10px;
+  border: none; border-radius: var(--r-md); cursor: pointer;
+  background: linear-gradient(135deg, #7C3AED, #4F46E5);
+  color: #fff; font-family: inherit; font-size: .84rem; font-weight: 600;
+  transition: all var(--ease);
+}
+.btn-open-obsidian:hover { filter: brightness(1.12); box-shadow: 0 6px 22px rgba(124,58,237,.42); }
+.btn-open-obsidian:active { transform: scale(.985); }
+.btn-open-obsidian .ico { width: 15px; height: 15px; }
+
 /* ── Legend — élévation 1 ───────────────────────────────────── */
 #legend {
   position: absolute; bottom: 68px; left: 16px;
