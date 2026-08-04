@@ -10,6 +10,8 @@ public record SpaceNode(
         NodeType type,
         int depth,
         long markdownCount,
+        long size,
+        List<String> links,
         List<SpaceNode> children
 
 ) {

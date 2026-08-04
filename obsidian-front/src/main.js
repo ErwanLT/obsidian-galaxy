@@ -12,6 +12,7 @@ let currentNode = null;      // currently "entered" node
 let currentObjects = [];     // Three.js groups in the current view
 let labelObjects = [];       // label sprites
 let orbitObjects = [];       // orbit lines
+let connectionLines = [];    // Constellation lines
 let showLabels = true;
 let selectedObject = null;
 let navigationStack = [];    // breadcrumb stack [{node, camera, level}]
@@ -171,12 +172,74 @@ function clearScene() {
   currentObjects.forEach(o => renderer.scene.remove(o));
   labelObjects.forEach(o => renderer.scene.remove(o));
   orbitObjects.forEach(o => renderer.scene.remove(o));
+  connectionLines.forEach(c => renderer.scene.remove(c.line));
   currentObjects = [];
   labelObjects = [];
   orbitObjects = [];
+  connectionLines = [];
   hoveredObject = null;
   selectedObject = null;
   hideInfoPanel();
+}
+
+/** Check if nodeA links to nodeB (directly or as part of directory) */
+function isLinked(nodeA, nodeB) {
+  if (nodeA.type === 'MARKDOWN_FILE' && nodeA.links) {
+    for (const linkPath of nodeA.links) {
+      if (nodeB.type === 'MARKDOWN_FILE') {
+        if (linkPath === nodeB.path) return true;
+      } else {
+        if (linkPath.startsWith(nodeB.path + '/') || linkPath.startsWith(nodeB.path + '\\')) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Create connection line segment between two objects */
+function createConnectionLine(objA, objB) {
+  const points = [objA.position.clone(), objB.position.clone()];
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  
+  const material = new THREE.LineBasicMaterial({
+    color: 0x34D399,
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  
+  const line = new THREE.Line(geometry, material);
+  renderer.scene.add(line);
+  
+  connectionLines.push({
+    line,
+    objA,
+    objB,
+    material
+  });
+}
+
+/** Build connections for all linked pairs in the current view */
+function buildConnections() {
+  connectionLines.forEach(c => renderer.scene.remove(c.line));
+  connectionLines = [];
+
+  const clickableObjects = currentObjects;
+  for (let i = 0; i < clickableObjects.length; i++) {
+    for (let j = i + 1; j < clickableObjects.length; j++) {
+      const objA = clickableObjects[i];
+      const objB = clickableObjects[j];
+      const nodeA = objA.userData?.node;
+      const nodeB = objB.userData?.node;
+
+      if (!nodeA || !nodeB) continue;
+
+      if (isLinked(nodeA, nodeB) || isLinked(nodeB, nodeA)) {
+        createConnectionLine(objA, objB);
+      }
+    }
+  }
 }
 
 /**
@@ -203,6 +266,7 @@ function buildRootView(universeData) {
     currentObjects.push(obj);
   });
 
+  buildConnections();
   updateBreadcrumb();
   updateBackButtonState();
 }
@@ -260,6 +324,7 @@ function buildGalaxyView(galaxyNode) {
     currentObjects.push(obj);
   });
 
+  buildConnections();
   updateBreadcrumb();
   updateBackButtonState();
 }
@@ -317,6 +382,7 @@ function buildSolarSystemView(ssNode) {
     currentObjects.push(obj);
   });
 
+  buildConnections();
   updateBreadcrumb();
   updateBackButtonState();
 }
@@ -370,6 +436,7 @@ function buildPlanetView(planetNode) {
     currentObjects.push(obj);
   });
 
+  buildConnections();
   updateBreadcrumb();
   updateBackButtonState();
 }
@@ -835,6 +902,40 @@ function animateObjects(time) {
       obj.position.y + sprite.userData.dy,
       obj.position.z,
     );
+  });
+
+  // Mettre à jour les positions et l'apparence des lignes de constellation
+  connectionLines.forEach(c => {
+    const positions = c.line.geometry.attributes.position.array;
+    positions[0] = c.objA.position.x;
+    positions[1] = c.objA.position.y;
+    positions[2] = c.objA.position.z;
+    positions[3] = c.objB.position.x;
+    positions[4] = c.objB.position.y;
+    positions[5] = c.objB.position.z;
+    c.line.geometry.attributes.position.needsUpdate = true;
+
+    let targetOpacity = 0.22;
+    let targetColor = 0x34D399; // Couleur de lune par défaut
+
+    if (selectedObject) {
+      if (c.objA === selectedObject || c.objB === selectedObject) {
+        targetOpacity = 0.85;
+        targetColor = 0x10B981; // Brillant
+      } else {
+        targetOpacity = 0.04; // Atténué
+      }
+    } else if (hoveredObject) {
+      if (c.objA === hoveredObject || c.objB === hoveredObject) {
+        targetOpacity = 0.85;
+        targetColor = 0x10B981;
+      } else {
+        targetOpacity = 0.04;
+      }
+    }
+
+    c.material.opacity = THREE.MathUtils.lerp(c.material.opacity, targetOpacity, 0.12);
+    c.material.color.setHex(targetColor);
   });
 }
 

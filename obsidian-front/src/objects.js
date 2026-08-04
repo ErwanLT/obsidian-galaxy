@@ -272,7 +272,12 @@ export function createMoon(scene, node, position, index) {
   group.userData = { node, type: 'moon', index };
 
   const color = pickColor(COLORS.moon, index);
-  const size = 1.2 + Math.random() * 0.8;
+  
+  // Dynamic size based on file size (node.size in bytes) using a log scale
+  const sizeInBytes = node.size || 0;
+  const logScale = Math.log10(Math.max(1, sizeInBytes));
+  const size = 1.0 + Math.min(logScale * 0.6, 2.5); // min 1.0, max 3.5
+  
   group.userData.visualRadius = size * 2.4;   // halo compris
 
   const geo = new THREE.SphereGeometry(size, 16, 16);

@@ -82,6 +82,21 @@ Le projet est divisé en deux modules distincts :
 
 ---
 
+## ✨ Nouvelles Fonctionnalités : Constellations & Astres Dynamiques
+
+Pour rendre la cartographie plus vivante et utile, deux fonctionnalités majeures ont été intégrées :
+
+1. **🌌 Constellations de Liens** :
+   - Les notes reliées entre elles par des liens internes Obsidian (`[[Nom de Note]]`) sont connectées par des faisceaux lumineux 3D de type constellations.
+   - **Interaction dynamique** : Au survol ou à la sélection d'un astre, ses lignes de connexion s'illuminent en vert intense tandis que les autres s'estompent pour améliorer la lisibilité.
+   - Si une note pointe vers un élément contenu dans un sous-dossier, la connexion s'établit avec la planète représentant ce dossier.
+
+2. **☄️ Taille Dynamique des Lunes** :
+   - La taille physique de chaque lune (note) est calculée de manière logarithmique selon son poids en octets sur le disque local (`node.size`).
+   - Vos notes denses et complètes apparaissent comme de gros satellites brillants, tandis que les notes courtes ou brouillons forment de plus petits corps célestes.
+
+---
+
 ## ⚙️ Configuration Avancée
 
 ### Contournement CORS & Proxy
