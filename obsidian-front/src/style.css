@@ -61,9 +61,13 @@
   --ease-slow: 0.5s cubic-bezier(0.16, 1, 0.3, 1);
 
   /* ── Couleurs par type d'astre ──────────────────────────── */
+  --t-supercluster: #6D28D9;
+  --t-cluster:      #8B5CF6;
   --t-galaxy:       #A78BFA;
-  --t-solar-system: #22D3EE;
+  --t-star:         #22D3EE;
   --t-planet:       #FBBF24;
+  --t-dwarf-planet: #F9A8D4;
+  --t-small-body:   #9CA3AF;
   --t-moon:         #34D399;
 }
 
@@ -261,10 +265,14 @@ html, body {
   margin-bottom: 9px;
 }
 #info-badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-#info-badge.galaxy       { background: rgba(167,139,250,.14); border: 1px solid rgba(167,139,250,.3); color: var(--t-galaxy); }
-#info-badge.solar-system { background: rgba(34,211,238,.14);  border: 1px solid rgba(34,211,238,.3);  color: var(--t-solar-system); }
-#info-badge.planet       { background: rgba(251,191,36,.14);  border: 1px solid rgba(251,191,36,.3);  color: var(--t-planet); }
-#info-badge.moon         { background: rgba(52,211,153,.14);  border: 1px solid rgba(52,211,153,.3);  color: var(--t-moon); }
+#info-badge.supercluster  { background: rgba(109,40,217,.14);  border: 1px solid rgba(109,40,217,.3);  color: var(--t-supercluster); }
+#info-badge.cluster       { background: rgba(139,92,246,.14);  border: 1px solid rgba(139,92,246,.3);  color: var(--t-cluster); }
+#info-badge.galaxy        { background: rgba(167,139,250,.14); border: 1px solid rgba(167,139,250,.3); color: var(--t-galaxy); }
+#info-badge.star          { background: rgba(34,211,238,.14);  border: 1px solid rgba(34,211,238,.3);  color: var(--t-star); }
+#info-badge.planet        { background: rgba(251,191,36,.14);  border: 1px solid rgba(251,191,36,.3);  color: var(--t-planet); }
+#info-badge.dwarf-planet  { background: rgba(249,168,212,.14); border: 1px solid rgba(249,168,212,.3); color: var(--t-dwarf-planet); }
+#info-badge.small-body    { background: rgba(156,163,175,.14); border: 1px solid rgba(156,163,175,.3); color: var(--t-small-body); }
+#info-badge.moon          { background: rgba(52,211,153,.14);  border: 1px solid rgba(52,211,153,.3);  color: var(--t-moon); }
 
 #info-name {
   font-size: 1.22rem; font-weight: 600; line-height: 1.25; letter-spacing: -.015em;
@@ -359,9 +367,13 @@ html, body {
 }
 .leg-item { display: flex; align-items: center; gap: 8px; font-size: .71rem; color: var(--text-mid); }
 .leg-dot  { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.leg-dot[data-t="supercluster"] { background: var(--t-supercluster); box-shadow: 0 0 7px var(--t-supercluster); }
+.leg-dot[data-t="cluster"]      { background: var(--t-cluster);      box-shadow: 0 0 7px var(--t-cluster); }
 .leg-dot[data-t="galaxy"]       { background: var(--t-galaxy);       box-shadow: 0 0 7px var(--t-galaxy); }
-.leg-dot[data-t="solar-system"] { background: var(--t-solar-system); box-shadow: 0 0 7px var(--t-solar-system); }
+.leg-dot[data-t="star"]         { background: var(--t-star);         box-shadow: 0 0 7px var(--t-star); }
 .leg-dot[data-t="planet"]       { background: var(--t-planet);       box-shadow: 0 0 7px var(--t-planet); }
+.leg-dot[data-t="dwarf-planet"] { background: var(--t-dwarf-planet); box-shadow: 0 0 7px var(--t-dwarf-planet); }
+.leg-dot[data-t="small-body"]   { background: var(--t-small-body);   box-shadow: 0 0 7px var(--t-small-body); }
 .leg-dot[data-t="moon"]         { background: var(--t-moon);         box-shadow: 0 0 7px var(--t-moon); }
 
 /* ── Nav cluster — élévation 2 ──────────────────────────────── */

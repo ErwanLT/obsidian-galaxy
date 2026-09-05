@@ -1,21 +1,85 @@
 /**
- * objects.js — 3D object factories for each space entity type
- * Galaxy, Solar System, Planet, Moon — each with unique visuals
+ * objects.js — 3D object factories for each space entity type.
+ * Une fabrique par corps céleste de la taxonomie (superamas, amas, galaxie,
+ * étoile, planète, planète naine, petit corps, lune) + createBody(), le
+ * dispatcher générique utilisé par les vues.
  */
 import * as THREE from 'three';
+import { VisualType } from './universe.js';
 
 export const COLORS = {
-  galaxy: [0x7C3AED, 0x8B5CF6, 0xA78BFA, 0x6D28D9, 0x5B21B6, 0x4C1D95],
+  supercluster: [0x4C1D95, 0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8B5CF6, 0xA78BFA],
+  cluster:      [0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8E3BFF, 0x8B5CF6, 0x9D6BFA],
+  galaxy:       [0x7C3AED, 0x8B5CF6, 0xA78BFA, 0x6D28D9, 0x5B21B6, 0x4C1D95],
   // Cyans saturés de valeur moyenne : les teintes sombres (0x0E7490,
   // 0x0369A1) ressortaient en gris-bleu terne une fois éclairées.
-  solarSystem: [0x06B6D4, 0x0EA5E9, 0x22D3EE, 0x14B8A6, 0x38BDF8, 0x2DD4BF],
-  planet: [0xF59E0B, 0xEF4444, 0x10B981, 0xF97316, 0xEC4899, 0x84CC16],
+  star:         [0x06B6D4, 0x0EA5E9, 0x22D3EE, 0x14B8A6, 0x38BDF8, 0x2DD4BF],
+  planet:       [0xF59E0B, 0xEF4444, 0x10B981, 0xF97316, 0xEC4899, 0x84CC16],
+  // Teintes pâles glacées pour les planètes naines.
+  dwarfPlanet:  [0xE5E7EB, 0xD8E3F0, 0xF3E8FF, 0xE0F2FE, 0xCBD5E1, 0xA7F3D0],
+  // Gris rocheux pour les petits corps.
+  smallBody:    [0x6B7280, 0x9CA3AF, 0x78716C, 0x8E9096, 0x7F8C8D, 0x57534E],
   // Teintes vertes : cohérentes avec la pastille « Lune / Note » de la légende.
-  moon: [0x34D399, 0x10B981, 0x6EE7B7, 0x059669, 0x2DD4BF, 0x14B8A6],
+  moon:         [0x34D399, 0x10B981, 0x6EE7B7, 0x059669, 0x2DD4BF, 0x14B8A6],
 };
 
 function pickColor(arr, idx) {
   return arr[idx % arr.length];
+}
+
+/**
+ * Rayons visuels (half-bounding) utilisés par les fabriques 3D.
+ * Exportés pour que le layout orbital (`orbitLayout`) dimensionne ses anneaux
+ * à partir des mêmes valeurs que celles réellement rendues.
+ */
+export function galaxyRadius(node) {
+  return 20 + Math.min(node.markdownCount * 0.5, 26);
+}
+
+export function superclusterRadius(node) {
+  return galaxyRadius(node) * 1.8;
+}
+
+export function clusterRadius(node) {
+  return galaxyRadius(node) * 1.25;
+}
+
+export function starRadius(node) {
+  return (8 + Math.min(node.markdownCount * 0.3, 12)) * 2.6;
+}
+
+export function planetRadius(node) {
+  return (4 + Math.min(node.markdownCount * 0.5, 8)) * 1.8;
+}
+
+export function dwarfPlanetRadius(node) {
+  const size = 3 + Math.min(node.markdownCount * 0.4, 6);
+  return size * 1.8;
+}
+
+export function smallBodyRadius(node) {
+  const size = 1.5 + Math.min(node.markdownCount * 0.3, 4);
+  return size * 2.5;
+}
+
+export function moonRadius(node) {
+  const sizeInBytes = node.size || 0;
+  const logScale = Math.log10(Math.max(1, sizeInBytes));
+  return (1.0 + Math.min(logScale * 0.6, 2.5)) * 2.4;
+}
+
+/** Rayon visuel du corps correspondant au type céleste d'un nœud. */
+export function bodyRadius(node) {
+  switch (node.visualType) {
+    case VisualType.SUPERCLUSTER: return superclusterRadius(node);
+    case VisualType.CLUSTER:      return clusterRadius(node);
+    case VisualType.GALAXY:       return galaxyRadius(node);
+    case VisualType.STAR:         return starRadius(node);
+    case VisualType.DWARF_PLANET: return dwarfPlanetRadius(node);
+    case VisualType.SMALL_BODY:   return smallBodyRadius(node);
+    case VisualType.PLANET:       return planetRadius(node);
+    default:                      return moonRadius(node);
+  }
 }
 
 /**
@@ -65,13 +129,17 @@ function addGlow(group, color, radius, opacity) {
  * Un disque de particules se lit en profondeur et laisse voir ce qui
  * est derrière.
  */
-export function createGalaxy(scene, node, position, index) {
+export function createGalaxy(scene, node, position, index, opts = {}) {
+  const sizeMul = opts.sizeMul ?? 1;
+  const colorKey = opts.colorKey ?? 'galaxy';
+  const type = opts.type ?? 'galaxy';
+
   const group = new THREE.Group();
   group.position.copy(position);
-  group.userData = { node, type: 'galaxy', index };
+  group.userData = { node, type, index };
 
-  const color = pickColor(COLORS.galaxy, index);
-  const radius = 20 + Math.min(node.markdownCount * 0.5, 26);   // rayon du disque
+  const color = pickColor(COLORS[colorKey], index);
+  const radius = galaxyRadius(node) * sizeMul;   // rayon du disque
   const bulge = radius * 0.22;
   group.userData.visualRadius = radius;
 
@@ -171,16 +239,34 @@ export function createGalaxy(scene, node, position, index) {
 }
 
 /**
- * Build a Solar System mesh — glowing ringed sphere
+ * Superamas — la plus vaste structure : grand disque de galaxies.
  */
-export function createSolarSystem(scene, node, position, index) {
+export function createSupercluster(scene, node, position, index) {
+  return createGalaxy(scene, node, position, index, {
+    sizeMul: 1.8, colorKey: 'supercluster', type: 'supercluster',
+  });
+}
+
+/**
+ * Amas de galaxies — disque intermédiaire entre superamas et galaxie.
+ */
+export function createCluster(scene, node, position, index) {
+  return createGalaxy(scene, node, position, index, {
+    sizeMul: 1.25, colorKey: 'cluster', type: 'cluster',
+  });
+}
+
+/**
+ * Build a Star mesh — glowing ringed sphere
+ */
+export function createStar(scene, node, position, index) {
   const group = new THREE.Group();
   group.position.copy(position);
-  group.userData = { node, type: 'solar-system', index };
+  group.userData = { node, type: 'star', index };
 
-  const color = pickColor(COLORS.solarSystem, index);
+  const color = pickColor(COLORS.star, index);
   const size = 8 + Math.min(node.markdownCount * 0.3, 12);
-  group.userData.visualRadius = size * 2.6;   // anneau + lueur
+  group.userData.visualRadius = starRadius(node);   // anneau + lueur
 
   // Cœur d'étoile : émissif fort, il doit paraître être sa propre source
   // de lumière et non une bille éclairée de l'extérieur.
@@ -228,7 +314,7 @@ export function createPlanet(scene, node, position, index) {
 
   const color = pickColor(COLORS.planet, index);
   const size = 4 + Math.min(node.markdownCount * 0.5, 8);
-  group.userData.visualRadius = size * 1.8;   // atmosphère + anneau éventuel
+  group.userData.visualRadius = planetRadius(node);   // atmosphère + anneau éventuel
 
   // Planet sphere with texture-like variation
   const geo = new THREE.SphereGeometry(size, 32, 32);
@@ -264,6 +350,64 @@ export function createPlanet(scene, node, position, index) {
 }
 
 /**
+ * Build a Dwarf Planet mesh — petite sphère pâle et irrégulière, sans anneau.
+ */
+export function createDwarfPlanet(scene, node, position, index) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.userData = { node, type: 'dwarf-planet', index };
+
+  const color = pickColor(COLORS.dwarfPlanet, index);
+  const size = 3 + Math.min(node.markdownCount * 0.4, 6);
+  group.userData.visualRadius = dwarfPlanetRadius(node);
+
+  const geo = new THREE.SphereGeometry(size, 24, 24);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.9,
+    metalness: 0.0,
+    emissive: color,
+    emissiveIntensity: 0.12,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData = { isCore: true };
+  group.add(mesh);
+
+  addGlow(group, color, size * 2.0, 0.3);
+
+  scene.add(group);
+  return group;
+}
+
+/**
+ * Build a Small Body mesh — rocher gris compact, la plus petite structure.
+ */
+export function createSmallBody(scene, node, position, index) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.userData = { node, type: 'small-body', index };
+
+  const color = pickColor(COLORS.smallBody, index);
+  const size = 1.5 + Math.min(node.markdownCount * 0.3, 4);
+  group.userData.visualRadius = smallBodyRadius(node);
+
+  const geo = new THREE.SphereGeometry(size, 16, 16);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.userData = { isCore: true };
+  group.add(mesh);
+
+  addGlow(group, color, size * 2.6, 0.35);
+
+  scene.add(group);
+  return group;
+}
+
+/**
  * Build a Moon mesh — small sphere
  */
 export function createMoon(scene, node, position, index) {
@@ -278,7 +422,7 @@ export function createMoon(scene, node, position, index) {
   const logScale = Math.log10(Math.max(1, sizeInBytes));
   const size = 1.0 + Math.min(logScale * 0.6, 2.5); // min 1.0, max 3.5
   
-  group.userData.visualRadius = size * 2.4;   // halo compris
+  group.userData.visualRadius = moonRadius(node);   // halo compris
 
   const geo = new THREE.SphereGeometry(size, 16, 16);
   const mat = new THREE.MeshStandardMaterial({
@@ -301,9 +445,12 @@ export function createMoon(scene, node, position, index) {
 }
 
 /**
- * Create an orbit trail ellipse for orbital mechanics feel
+ * Create an orbit trail ellipse for orbital mechanics feel.
+ *
+ * @param {number} incl  inclinaison en radians — tilt du plan orbital
+ * @param {number} omega longitude du nœud ascendant en radians — rotation du plan autour de Y
  */
-export function createOrbit(scene, center, radius, color = 0x333366, tilt = 0) {
+export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, omega = 0) {
   const points = [];
   const segments = 128;
   for (let i = 0; i <= segments; i++) {
@@ -311,6 +458,16 @@ export function createOrbit(scene, center, radius, color = 0x333366, tilt = 0) {
     points.push(new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
   }
   const geo = new THREE.BufferGeometry().setFromPoints(points);
+
+  // On incline les sommets avec la même rotation (Y après X) que celle
+  // appliquée au corps en animation : le tracé et l'astre partagent le plan.
+  if (incl || omega) {
+    const m = new THREE.Matrix4()
+      .makeRotationY(omega)
+      .multiply(new THREE.Matrix4().makeRotationX(incl));
+    geo.applyMatrix4(m);
+  }
+
   const mat = new THREE.LineBasicMaterial({
     color,
     transparent: true,
@@ -318,7 +475,6 @@ export function createOrbit(scene, center, radius, color = 0x333366, tilt = 0) {
   });
   const orbit = new THREE.LineLoop(geo, mat);
   orbit.position.copy(center);
-  orbit.rotation.x = tilt;
   scene.add(orbit);
   return orbit;
 }
@@ -375,4 +531,21 @@ export function createLabel(text, position, color = '#ffffff', fontSize = 48, wi
   const spriteWidth = spriteHeight * (canvasWidth / canvasHeight);
   sprite.scale.set(spriteWidth, spriteHeight, 1);
   return sprite;
+}
+
+/**
+ * createBody — dispatcher générique : construit le corps céleste du type
+ * du nœud. Utilisé par toutes les vues (racine, dossier, notes).
+ */
+export function createBody(scene, node, position, index) {
+  switch (node.visualType) {
+    case VisualType.SUPERCLUSTER: return createSupercluster(scene, node, position, index);
+    case VisualType.CLUSTER:      return createCluster(scene, node, position, index);
+    case VisualType.GALAXY:       return createGalaxy(scene, node, position, index);
+    case VisualType.STAR:         return createStar(scene, node, position, index);
+    case VisualType.DWARF_PLANET: return createDwarfPlanet(scene, node, position, index);
+    case VisualType.SMALL_BODY:   return createSmallBody(scene, node, position, index);
+    case VisualType.PLANET:       return createPlanet(scene, node, position, index);
+    default:                      return createMoon(scene, node, position, index);
+  }
 }

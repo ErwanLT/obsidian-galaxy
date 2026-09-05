@@ -6,15 +6,34 @@
 const API_BASE = 'http://localhost:8080';
 
 export const NodeType = { DIRECTORY: 'DIRECTORY', MARKDOWN_FILE: 'MARKDOWN_FILE' };
-export const VisualType = { GALAXY: 'galaxy', SOLAR_SYSTEM: 'solar-system', PLANET: 'planet', MOON: 'moon' };
 
-/** Map a node to its visual space type */
+/**
+ * Taxonomie astrophysique réaliste, du plus grand au plus petit :
+ * superamas → amas → galaxie → étoile → planète → planète naine → petit corps,
+ * et lune pour les notes (.md).
+ */
+export const VisualType = {
+  SUPERCLUSTER: 'supercluster',
+  CLUSTER: 'cluster',
+  GALAXY: 'galaxy',
+  STAR: 'star',
+  PLANET: 'planet',
+  DWARF_PLANET: 'dwarf-planet',
+  SMALL_BODY: 'small-body',
+  MOON: 'moon',
+};
+
+/** Map a node to its visual space type (by directory depth) */
 export function getVisualType(node) {
   if (node.type === NodeType.MARKDOWN_FILE) return VisualType.MOON;
   switch (node.depth) {
-    case 0: return VisualType.GALAXY;
-    case 1: return VisualType.SOLAR_SYSTEM;
-    default: return VisualType.PLANET;
+    case 0: return VisualType.SUPERCLUSTER;
+    case 1: return VisualType.CLUSTER;
+    case 2: return VisualType.GALAXY;
+    case 3: return VisualType.STAR;
+    case 4: return VisualType.PLANET;
+    case 5: return VisualType.DWARF_PLANET;
+    default: return VisualType.SMALL_BODY;
   }
 }
 
@@ -49,24 +68,36 @@ export async function fetchUniverse() {
 }
 
 export const TYPE_EMOJI = {
+  [VisualType.SUPERCLUSTER]: '🕸️',
+  [VisualType.CLUSTER]:      '🌠',
   [VisualType.GALAXY]:       '🌌',
-  [VisualType.SOLAR_SYSTEM]: '☀️',
+  [VisualType.STAR]:         '☀️',
   [VisualType.PLANET]:       '🪐',
+  [VisualType.DWARF_PLANET]: '🪨',
+  [VisualType.SMALL_BODY]:   '☄️',
   [VisualType.MOON]:         '🌙',
 };
 
 export const TYPE_LABEL = {
+  [VisualType.SUPERCLUSTER]: 'Superamas',
+  [VisualType.CLUSTER]:      'Amas de galaxies',
   [VisualType.GALAXY]:       'Galaxie',
-  [VisualType.SOLAR_SYSTEM]: 'Système Solaire',
+  [VisualType.STAR]:         'Système stellaire',
   [VisualType.PLANET]:       'Planète',
+  [VisualType.DWARF_PLANET]: 'Planète naine',
+  [VisualType.SMALL_BODY]:   'Petit corps',
   [VisualType.MOON]:         'Lune',
 };
 
 /** Couleur d'accent par type — reprise dans le HUD (pastilles, légende,
  *  badges) et dans les labels 3D pour que les deux se répondent. */
 export const TYPE_COLOR = {
+  [VisualType.SUPERCLUSTER]: '#6D28D9',
+  [VisualType.CLUSTER]:      '#8B5CF6',
   [VisualType.GALAXY]:       '#A78BFA',
-  [VisualType.SOLAR_SYSTEM]: '#22D3EE',
+  [VisualType.STAR]:         '#22D3EE',
   [VisualType.PLANET]:       '#FBBF24',
+  [VisualType.DWARF_PLANET]: '#F9A8D4',
+  [VisualType.SMALL_BODY]:   '#9CA3AF',
   [VisualType.MOON]:         '#34D399',
 };

@@ -2,12 +2,12 @@ import './style.css';
 import * as THREE from 'three';
 import { fetchUniverse, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
-import { createGalaxy, createSolarSystem, createPlanet, createMoon, createOrbit, createLabel } from './objects.js';
+import { createBody, bodyRadius, createOrbit, createLabel } from './objects.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let renderer;
 let universe;
-let currentLevel = 'root';   // 'root' | 'galaxy' | 'solar' | 'planet'
+let currentLevel = 'root';   // 'root' | 'directory'
 let currentNode = null;      // currently "entered" node
 let currentObjects = [];     // Three.js groups in the current view
 let labelObjects = [];       // label sprites
@@ -110,36 +110,146 @@ function discLayout(n) {
 }
 
 /**
- * Circular orbit layout for children of a node
+ * Layout orbital — anneaux concentriques dimensionnés par la taille des astres
+ * et par l'inclinaison des plans orbitaux.
+ *
+ * Chaque anneau est posé à plat, puis reçoit UN seul plan orbital incliné
+ * (`planes[placed]`) : l'anneau tourne « en bloc » sur son disque basculé et la
+ * géométrie intra-anneau reste donc exacte (corde entre voisins ≥ somme des
+ * rayons + marge). Les anneaux successifs sont en revanche écartés d'un coup
+ * (`SIN_TILT`) pour que, même basculés, leurs enveloppes verticales ne
+ * s'entrecroisent pas.
  */
-function orbitLayout(n, minR, maxR) {
-  const positions = [];
-  if (n === 0) return positions;
+const SIN_TILT = 0.25;   // sin(inclinaison max) — enveloppe verticale d'un plan
+
+function orbitLayout(n, minR, maxR, sizes = []) {
+  const positions = new Array(n);
+  const planes = new Array(n);
+  if (n === 0) return { positions, planes };
+
+  const pad = 8;      // marge libre entre deux astres voisins
+  const ringCap = 7;  // nombre max d'astres par anneau
+
   if (n === 1) {
-    positions.push(new THREE.Vector3(minR + 10, 0, 0));
-    return positions;
+    positions[0] = new THREE.Vector3(minR, 0, 0);
+    planes[0] = { incl: 0, omega: 0 };
+    return { positions, planes };
   }
-  // Multiple rings if many children
-  const ringCap = 8;
+
+  const maxOf = arr => arr.reduce((a, b) => Math.max(a, b || 0), 0);
+
   let placed = 0;
   let ring = 0;
+  let prevRingR = 0;      // rayon de l'anneau précédent
+  let prevRingMax = 0;    // rMax (plus gros corps) de l'anneau précédent
+
   while (placed < n) {
-    const inRing = Math.min(ringCap + ring * 4, n - placed);
-    const r = minR + ring * ((maxR - minR) / Math.max(1, Math.ceil(n / ringCap)));
-    const tilt = (ring % 2 === 0 ? 1 : -1) * (ring * 0.15);
-    for (let i = 0; i < inRing; i++) {
-      const angle = (i / inRing) * Math.PI * 2 + ring * 0.4;
-      positions.push(new THREE.Vector3(
-        Math.cos(angle) * r,
-        Math.sin(tilt + angle * 0.05) * r * 0.1,
-        Math.sin(angle) * r,
-      ));
-      placed++;
-      if (placed >= n) break;
+    let count = Math.min(ringCap + ring * 2, n - placed);
+    let rMax = maxOf(sizes.slice(placed, placed + count));
+
+    let r = Math.max(minR, rMax + pad);
+    if (count > 1) {
+      // Corde entre deux voisins (2·r·sin(π/count)) ≥ 2·rMax + pad
+      const byChord = (2 * rMax + pad) / (2 * Math.sin(Math.PI / count));
+      r = Math.max(r, byChord);
     }
+    if (ring > 0) {
+      // L'anneau précédent bascule et remonte ses corps de ±sin(θ)·prevRingR :
+      // on décale l'anneau courant assez pour que ses corps ne frôlent jamais
+      // l'enveloppe de l'anneau intérieur.
+      r = Math.max(r, (prevRingR + prevRingMax + rMax + pad) / (1 - SIN_TILT));
+    }
+    // Pas assez de place dans le plan : on coupe l'anneau en deux pour
+    // réduire rMax et tenter un rayon plus petit.
+    for (let attempt = 0; attempt < 6 && r > maxR && count > 1; attempt++) {
+      count = Math.max(2, Math.ceil(count / 2));
+      rMax = maxOf(sizes.slice(placed, placed + count));
+      r = Math.max(minR, rMax + pad);
+      if (count > 1) {
+        const byChord = (2 * rMax + pad) / (2 * Math.sin(Math.PI / count));
+        r = Math.max(r, byChord);
+      }
+      if (ring > 0) {
+        r = Math.max(r, (prevRingR + prevRingMax + rMax + pad) / (1 - SIN_TILT));
+      }
+    }
+    r = Math.min(r, maxR);
+
+    // UN plan orbital pour tout l'anneau : couronne rigide basculée, aucun
+    // voisin du même anneau ne se croise.
+    const incl = 0.15 + Math.random() * 0.10;   // ~9° à 14°
+    const omega = Math.random() * Math.PI * 2;
+
+    const offset = ring * 0.45;   // casse l'alignement radial entre anneaux
+    for (let i = 0; i < count; i++) {
+      const angle = offset + (i / count) * Math.PI * 2;
+      positions[placed] = new THREE.Vector3(
+        Math.cos(angle) * r,
+        i % 2 === 0 ? -0.7 : 0.7,   // léger relief vertical
+        Math.sin(angle) * r,
+      );
+      planes[placed] = { incl, omega };
+      placed++;
+    }
+
+    prevRingR = r;
+    prevRingMax = rMax;
     ring++;
   }
-  return positions;
+  return { positions, planes };
+}
+
+/**
+ * Point d'un corps sur son plan orbital incliné.
+ *
+ * La rotation est : inclinaison autour de X (le plan plonge vers l'axe Y),
+ * puis longitude du nœud ascendant autour de Y. Même transformation que celle
+ * appliquée aux sommets du tracé d'orbite dans `createOrbit`.
+ */
+const _orbitPt = new THREE.Vector3();
+function orbitPoint(r, angle, incl, omega) {
+  const lx = Math.cos(angle) * r;
+  const lz = Math.sin(angle) * r;
+
+  const y1 = -lz * Math.sin(incl);
+  const z1 = lz * Math.cos(incl);
+
+  const so = Math.sin(omega);
+  const co = Math.cos(omega);
+  _orbitPt.set(
+    lx * co + z1 * so,
+    y1,
+    -lx * so + z1 * co,
+  );
+  return _orbitPt;
+}
+
+/**
+ * Affecte les données d'orbite d'un astre cliquable.
+ *
+ * Le plan orbital (incl / ω) est fourni par `orbitLayout` : il est commun à
+ * tout un anneau. `orbitSpeed` est dérivé du rayon : tous les corps d'un même
+ * anneau partagent la même vitesse angulaire, l'anneau tourne « en bloc » et
+ * deux voisins ne se dépassent jamais — plus de chevauchement transitoire
+ * pendant l'animation.
+ *
+ * On repositionne immédiatement l'astre sur son plan incliné pour éviter tout
+ * saut à la première frame.
+ */
+function setOrbit(obj, pos, incl = 0, omega = 0) {
+  const r = pos.length();
+
+  obj.userData.orbitRadius = r;
+  obj.userData.orbitAngle = Math.atan2(pos.z, pos.x);
+  obj.userData.orbitSpeed = 0.02 + 6 / (r + 30);
+  obj.userData.orbitIncl = incl;
+  obj.userData.orbitOmega = omega;
+
+  const p = orbitPoint(r, obj.userData.orbitAngle, incl, omega);
+  obj.userData.baseX = p.x;
+  obj.userData.baseY = p.y;
+  obj.userData.baseZ = p.z;
+  obj.position.set(p.x, p.y, p.z);
 }
 
 // ─── Scene building ───────────────────────────────────────────────────────────
@@ -250,135 +360,35 @@ function buildRootView(universeData) {
   currentLevel = 'root';
   currentNode = null;
 
-  const galaxies = universeData.children;
-  const positions = discLayout(galaxies.length);
+  const dirs = universeData.children.filter(c => c.type === 'DIRECTORY');
+  const files = universeData.children.filter(c => c.type === 'MARKDOWN_FILE');
 
-  galaxies.forEach((node, i) => {
+  // Superamas (dossiers racines) disposés en spirale de Fermat
+  const positions = discLayout(dirs.length);
+  dirs.forEach((node, i) => {
     const pos = positions[i];
-    const obj = createGalaxy(renderer.scene, node, pos, i);
+    const obj = createBody(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
 
-    addLabel(obj, node, 42, 42, 58);
+    addLabel(obj, node, 44, 44, 58);
 
     currentObjects.push(obj);
   });
 
-  buildConnections();
-  updateBreadcrumb();
-  updateBackButtonState();
-}
-
-/**
- * Galaxy view — solar systems orbiting the galaxy
- */
-function buildGalaxyView(galaxyNode) {
-  clearScene();
-  currentLevel = 'galaxy';
-  currentNode = galaxyNode;
-
-  const children = galaxyNode.children || [];
-  const dirs = children.filter(c => c.type === 'DIRECTORY');
-  const files = children.filter(c => c.type === 'MARKDOWN_FILE');
-
-  // Central galaxy
-  const center = new THREE.Vector3(0, 0, 0);
-  const centralObj = createGalaxy(renderer.scene, galaxyNode, center, 0);
-  centralObj.userData.clickable = false;
-  currentObjects.push(centralObj);
-
-  // Solar systems in orbit (more compact)
-  const ssPositions = orbitLayout(dirs.length, 65, 155);
-  dirs.forEach((node, i) => {
-    const pos = ssPositions[i];
-    const obj = createSolarSystem(renderer.scene, node, pos, i);
-    obj.userData.clickable = true;
-    obj.userData.baseX = pos.x;
-    obj.userData.baseY = pos.y;
-    obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
-
-    const orbit = createOrbit(renderer.scene, center, pos.length(), 0x4C1D95, 0);
-    orbitObjects.push(orbit);
-
-    addLabel(obj, node, 24, 38, 40);
-
-    currentObjects.push(obj);
-  });
-
-  // Loose markdown files as moons close in
-  const moonPositions = orbitLayout(files.length, 36, 58);
-  files.forEach((node, i) => {
-    const pos = moonPositions[i];
-    const obj = createMoon(renderer.scene, node, pos, i);
-    obj.userData.clickable = true;
-    obj.userData.baseX = pos.x;
-    obj.userData.baseY = pos.y;
-    obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    addLabel(obj, node, 8, 30, 22);
-    currentObjects.push(obj);
-  });
-
-  buildConnections();
-  updateBreadcrumb();
-  updateBackButtonState();
-}
-
-/**
- * Solar system view — planets orbiting the star
- */
-function buildSolarSystemView(ssNode) {
-  clearScene();
-  currentLevel = 'solar';
-  currentNode = ssNode;
-
-  const children = ssNode.children || [];
-  const dirs = children.filter(c => c.type === 'DIRECTORY');
-  const files = children.filter(c => c.type === 'MARKDOWN_FILE');
-
-  // Central star
-  const center = new THREE.Vector3(0, 0, 0);
-  const centralObj = createSolarSystem(renderer.scene, ssNode, center, 0);
-  centralObj.userData.clickable = false;
-  currentObjects.push(centralObj);
-
-  // Planets (more compact)
-  const pPositions = orbitLayout(dirs.length, 50, 120);
-  dirs.forEach((node, i) => {
-    const pos = pPositions[i];
-    const obj = createPlanet(renderer.scene, node, pos, i);
-    obj.userData.clickable = true;
-    obj.userData.baseX = pos.x;
-    obj.userData.baseY = pos.y;
-    obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
-
-    const orbit = createOrbit(renderer.scene, center, pos.length(), 0x0891B2, 0.05 * i);
-    orbitObjects.push(orbit);
-
-    addLabel(obj, node, 16, 34, 30);
-
-    currentObjects.push(obj);
-  });
-
-  // Markdown files as moons near star
-  const mPositions = orbitLayout(files.length, 35, 50);
+  // Notes posées à la racine du vault : lunes en halo, loin des superamas
+  const { positions: mPositions, planes: moonPlanes } = orbitLayout(files.length, 150, 270, files.map(bodyRadius));
   files.forEach((node, i) => {
     const pos = mPositions[i];
-    const obj = createMoon(renderer.scene, node, pos, i);
+    const obj = createBody(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    addLabel(obj, node, 7, 28, 20);
+    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega);
+    addLabel(obj, node, 6, 28, 18);
     currentObjects.push(obj);
   });
 
@@ -387,52 +397,96 @@ function buildSolarSystemView(ssNode) {
   updateBackButtonState();
 }
 
-/**
- * Planet view — moons orbiting
- */
-function buildPlanetView(planetNode) {
-  clearScene();
-  currentLevel = 'planet';
-  currentNode = planetNode;
+// ─── Paramètres visuels par type d'astre ─────────────────────────────────────
 
-  const children = planetNode.children || [];
+/** Labels 3D : décalage vertical, taille de police, largeur de sprite par type. */
+const LABEL_SPEC = {
+  [VisualType.SUPERCLUSTER]: { dy: 44, font: 44, width: 58 },
+  [VisualType.CLUSTER]:      { dy: 36, font: 40, width: 50 },
+  [VisualType.GALAXY]:       { dy: 30, font: 38, width: 44 },
+  [VisualType.STAR]:         { dy: 22, font: 34, width: 36 },
+  [VisualType.PLANET]:       { dy: 16, font: 32, width: 30 },
+  [VisualType.DWARF_PLANET]: { dy: 12, font: 28, width: 24 },
+  [VisualType.SMALL_BODY]:   { dy: 10, font: 26, width: 22 },
+  [VisualType.MOON]:         { dy: 6,  font: 28, width: 18 },
+};
+
+/** Plages radiales (min, max) de l'anneau des enfants par type de dossier. */
+const ORBIT_RANGE = {
+  [VisualType.SUPERCLUSTER]: [90, 260],
+  [VisualType.CLUSTER]:      [70, 210],
+  [VisualType.GALAXY]:       [60, 180],
+  [VisualType.STAR]:         [50, 150],
+  [VisualType.PLANET]:       [42, 130],
+  [VisualType.DWARF_PLANET]: [36, 110],
+  [VisualType.SMALL_BODY]:   [34, 100],
+};
+
+/** Couleur du tracé d'orbite par type d'astre enfant. */
+const ORBIT_COLOR = {
+  [VisualType.SUPERCLUSTER]: 0x6D28D9,
+  [VisualType.CLUSTER]:      0x8B5CF6,
+  [VisualType.GALAXY]:       0x4C1D95,
+  [VisualType.STAR]:         0x22D3EE,
+  [VisualType.PLANET]:       0x0891B2,
+  [VisualType.DWARF_PLANET]: 0xF9A8D4,
+  [VisualType.SMALL_BODY]:   0x9CA3AF,
+  [VisualType.MOON]:         0x059669,
+};
+
+/**
+ * Vue générique d'un dossier : le dossier devient l'astre central de son type
+ * (superamas, amas, galaxie, étoile, planète…) et ses enfants — sous-dossiers
+ * et notes — orbitent autour de lui. Même narration pour tous les niveaux.
+ */
+function buildDirectoryView(node) {
+  clearScene();
+  currentLevel = 'directory';
+  currentNode = node;
+
+  const children = node.children || [];
   const dirs = children.filter(c => c.type === 'DIRECTORY');
   const files = children.filter(c => c.type === 'MARKDOWN_FILE');
 
   const center = new THREE.Vector3(0, 0, 0);
-  const centralObj = createPlanet(renderer.scene, planetNode, center, 0);
+  const centralObj = createBody(renderer.scene, node, center, 0);
   centralObj.userData.clickable = false;
   currentObjects.push(centralObj);
 
-  // Sub-directories as sub-planets (more compact)
-  const spPositions = orbitLayout(dirs.length, 36, 78);
-  dirs.forEach((node, i) => {
-    const pos = spPositions[i];
-    const obj = createPlanet(renderer.scene, node, pos, i + 1);
+  // Sous-dossiers : chaque enfant orbite selon son propre type céleste.
+  const childType = dirs[0]?.visualType ?? VisualType.MOON;
+  const range = ORBIT_RANGE[childType] || [36, 120];
+  const spec = LABEL_SPEC[childType] || LABEL_SPEC[VisualType.MOON];
+  const { positions, planes } = orbitLayout(dirs.length, range[0], range[1], dirs.map(bodyRadius));
+
+  dirs.forEach((child, i) => {
+    const pos = positions[i];
+    const obj = createBody(renderer.scene, child, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(dirs.length, 1));
-    const orbit = createOrbit(renderer.scene, center, pos.length(), 0xF59E0B, 0.1 * i);
+    setOrbit(obj, pos, planes[i].incl, planes[i].omega);
+
+    const orbit = createOrbit(renderer.scene, center, pos.length(), ORBIT_COLOR[childType], obj.userData.orbitIncl, obj.userData.orbitOmega);
     orbitObjects.push(orbit);
-    addLabel(obj, node, 12, 30, 24);
+
+    addLabel(obj, child, spec.dy, spec.font, spec.width);
+
     currentObjects.push(obj);
   });
 
-  // Moons (set to 35-50)
-  const mPositions = orbitLayout(files.length, 35, 50);
-  files.forEach((node, i) => {
+  // Notes Markdown : lunes en orbite proche de l'astre.
+  const { positions: mPositions, planes: moonPlanes } = orbitLayout(files.length, 38, 110, files.map(bodyRadius));
+  files.forEach((child, i) => {
     const pos = mPositions[i];
-    const obj = createMoon(renderer.scene, node, pos, i);
+    const obj = createBody(renderer.scene, child, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    obj.userData.orbitRadius = pos.length();
-    obj.userData.orbitAngle = i * (Math.PI * 2 / Math.max(files.length, 1));
-    addLabel(obj, node, 6, 26, 18);
+    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega);
+    addLabel(obj, child, LABEL_SPEC[VisualType.MOON].dy, LABEL_SPEC[VisualType.MOON].font, LABEL_SPEC[VisualType.MOON].width);
     currentObjects.push(obj);
   });
 
@@ -532,6 +586,8 @@ function frameCurrentView(ms = 1000) {
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 function enterNode(node) {
+  if (node.type === 'MARKDOWN_FILE') return;   // les notes n'ont pas de vue
+
   const savedCamera = {
     pos: renderer.camera.position.clone(),
     target: renderer.controls.target.clone(),
@@ -539,20 +595,7 @@ function enterNode(node) {
 
   navigationStack.push({ node: currentNode, camera: savedCamera, level: currentLevel });
 
-  switch (node.visualType) {
-    case VisualType.GALAXY:
-      buildGalaxyView(node);
-      break;
-    case VisualType.SOLAR_SYSTEM:
-      buildSolarSystemView(node);
-      break;
-    case VisualType.PLANET:
-      buildPlanetView(node);
-      break;
-    default:
-      return; // moons/files don't enter
-  }
-
+  buildDirectoryView(node);
   frameCurrentView(1000);
 }
 
@@ -563,12 +606,7 @@ function goBack() {
   if (prev.level === 'root' || !prev.node) {
     buildRootView(universe);
   } else {
-    switch (prev.node.visualType) {
-      case VisualType.GALAXY: buildGalaxyView(prev.node); break;
-      case VisualType.SOLAR_SYSTEM: buildSolarSystemView(prev.node); break;
-      case VisualType.PLANET: buildPlanetView(prev.node); break;
-      default: buildRootView(universe);
-    }
+    buildDirectoryView(prev.node);
   }
 
   if (prev.camera) {
@@ -711,8 +749,9 @@ function updateBreadcrumb() {
   navigationStack.forEach((entry, i) => {
     if (!entry.node) return;
     addItem(entry.node.name, entry.node.visualType, () => {
-      // Remonter jusqu'à ce niveau
-      const stepsBack = navigationStack.length - i - 1;
+      // Remonter jusqu'à ce niveau : il faut dépiler les entrées au-dessus
+      // (observateur ≤ i), pas en dessous.
+      const stepsBack = navigationStack.length - i;
       for (let s = 0; s < stepsBack; s++) goBack();
     });
   });
@@ -818,17 +857,32 @@ function animateObjects(time) {
     const vt = obj.userData?.node?.visualType;
     const isClickable = obj.userData.clickable;
 
+    // Orbite inclinée : tout corps non central tourne autour de son astre.
+    const orbiting = isClickable && Number.isFinite(obj.userData?.orbitRadius);
+    if (orbiting) {
+      const baseAngle = obj.userData.orbitAngle ?? 0;
+      const speed = obj.userData.orbitSpeed ?? 0.03;
+      const angle = baseAngle + t * speed;
+      const r = obj.userData.orbitRadius;
+      const p = orbitPoint(r, angle, obj.userData.orbitIncl ?? 0, obj.userData.orbitOmega ?? 0);
+      obj.position.x = p.x;
+      obj.position.y = p.y + Math.sin(t * 1.5 + i * 1.3) * 0.5;
+      obj.position.z = p.z;
+    }
+
     switch (vt) {
+      case VisualType.SUPERCLUSTER:
+      case VisualType.CLUSTER:
       case VisualType.GALAXY:
-        // La galaxie centrale tourne très lentement, les galaxies périphériques un peu plus vite
+        // L'astre central tourne très lentement, les corps périphériques un peu plus vite
         obj.rotation.y = isClickable ? (t * 0.01 + i * 1.2) : (t * 0.002);
-        
+
         // Animation fluide des bras spiraux par écoulement radial
         obj.children.forEach(c => {
           if (c.userData?.isDisc) {
             const geo = c.geometry;
             const positions = geo.attributes.position.array;
-            
+
             const u0s = c.userData.u0s;
             const radialSpeeds = c.userData.radialSpeeds;
             const arms = c.userData.arms;
@@ -843,12 +897,12 @@ function animateObjects(time) {
               for (let j = 0; j < N; j++) {
                 // Écoulement radial : u augmente et boucle entre 0 et 1
                 const u = (u0s[j] + t * radialSpeeds[j]) % 1.0;
-                
+
                 // Calcul de la position le long du bras spiral
                 const r_base = bulge * 0.8 + u * radius;
                 const rr = r_base * (1 + rJitters[j]);
                 const angle = (arms[j] / ARMS) * Math.PI * 2 + u * 3.1 * Math.PI + t * 0.05 + jitters[j];
-                
+
                 positions[j * 3]     = Math.cos(angle) * rr;
                 positions[j * 3 + 2] = Math.sin(angle) * rr;
               }
@@ -857,37 +911,18 @@ function animateObjects(time) {
           }
         });
         break;
-      case VisualType.SOLAR_SYSTEM:
+      case VisualType.STAR:
         obj.rotation.y = isClickable ? (t * 0.04 + i * 0.7) : (t * 0.005);
         break;
-      case VisualType.PLANET: {
-        // Orbite autour du centre si l'astre est cliquable (pas au centre de la vue)
-        if (isClickable) {
-          const baseAngle = obj.userData.orbitAngle ?? 0;
-          const speed = 0.015 + i * 0.003;
-          const angle = baseAngle + t * speed;
-          const r = obj.userData.orbitRadius ?? 60;
-          obj.position.x = Math.cos(angle) * r;
-          obj.position.z = Math.sin(angle) * r;
-        }
+      default:
+        // Planètes, planètes naines, petits corps et lunes
         obj.rotation.y = isClickable ? (t * 0.08) : (t * 0.01);
         break;
-      }
-      case VisualType.MOON: {
-        if (isClickable) {
-          const baseAngle = obj.userData.orbitAngle ?? 0;
-          const speed = 0.04 + i * 0.006;
-          const angle = baseAngle + t * speed;
-          const r = obj.userData.orbitRadius ?? 20;
-          obj.position.x = Math.cos(angle) * r;
-          obj.position.z = Math.sin(angle) * r;
-        }
-        break;
-      }
     }
 
     // Gentle float (locked oscillation around baseY to prevent accumulation drift)
-    if (obj.userData.clickable) {
+    // Les corps orbitants sont exclus : leur y vient du plan orbital incliné.
+    if (isClickable && !orbiting) {
       const baseY = obj.userData.baseY ?? 0;
       obj.position.y = baseY + Math.sin(t * 1.5 + i * 1.3) * 0.5;
     }
@@ -954,19 +989,14 @@ function buildSearchIndex(universeData) {
   (universeData.children || []).forEach(c => walk(c, []));
 }
 
-function levelForDepth(depth) {
-  if (depth === 0) return 'galaxy';
-  if (depth === 1) return 'solar';
-  return 'planet';
+function levelForDepth() {
+  return 'directory';
 }
 
 function buildViewFor(node) {
-  switch (node.visualType) {
-    case VisualType.GALAXY:       buildGalaxyView(node); return true;
-    case VisualType.SOLAR_SYSTEM: buildSolarSystemView(node); return true;
-    case VisualType.PLANET:       buildPlanetView(node); return true;
-    default: return false;
-  }
+  if (node.type === 'MARKDOWN_FILE') return false;
+  buildDirectoryView(node);
+  return true;
 }
 
 /**
