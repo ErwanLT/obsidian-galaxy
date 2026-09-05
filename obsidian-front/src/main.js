@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { fetchUniverse, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
-import { createBody, bodyRadius, createOrbit, createLabel } from './objects.js';
+import { createBody, bodyRadius, createStar, createOrbit, createLabel } from './objects.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let renderer;
@@ -207,9 +207,14 @@ function orbitLayout(n, minR, maxR, sizes = []) {
  * appliquée aux sommets du tracé d'orbite dans `createOrbit`.
  */
 const _orbitPt = new THREE.Vector3();
-function orbitPoint(r, angle, incl, omega) {
-  const lx = Math.cos(angle) * r;
-  const lz = Math.sin(angle) * r;
+function orbitPoint(r, angle, incl, omega, e = 0, orient = 0) {
+  // Ellipse dans son plan, Soleil au foyer (origine) : x = a·cos(θ) − a·e
+  const a = r;
+  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
+  const c = a * e;
+  const t = angle + orient;
+  const lx = a * Math.cos(t) - c;
+  const lz = b * Math.sin(t);
 
   const y1 = -lz * Math.sin(incl);
   const z1 = lz * Math.cos(incl);
@@ -227,25 +232,26 @@ function orbitPoint(r, angle, incl, omega) {
 /**
  * Affecte les données d'orbite d'un astre cliquable.
  *
- * Le plan orbital (incl / ω) est fourni par `orbitLayout` : il est commun à
- * tout un anneau. `orbitSpeed` est dérivé du rayon : tous les corps d'un même
- * anneau partagent la même vitesse angulaire, l'anneau tourne « en bloc » et
- * deux voisins ne se dépassent jamais — plus de chevauchement transitoire
- * pendant l'animation.
+ * Orbites képlériennes : excentricité e (ellipse, Soleil au foyer) et vitesse
+ * angulaire proportionnelle à 1/√a (3e loi de Képler). L'anneau tourne « en
+ * bloc » : tous les corps d'un même anneau partagent vitesse et plan, deux
+ * voisins ne se dépassent jamais.
  *
  * On repositionne immédiatement l'astre sur son plan incliné pour éviter tout
  * saut à la première frame.
  */
-function setOrbit(obj, pos, incl = 0, omega = 0) {
+function setOrbit(obj, pos, incl = 0, omega = 0, e = 0, orient = 0) {
   const r = pos.length();
 
   obj.userData.orbitRadius = r;
   obj.userData.orbitAngle = Math.atan2(pos.z, pos.x);
-  obj.userData.orbitSpeed = 0.02 + 6 / (r + 30);
+  obj.userData.orbitSpeed = 0.6 / Math.sqrt(r);   // Képler : ω ∝ a^(−1/2)
   obj.userData.orbitIncl = incl;
   obj.userData.orbitOmega = omega;
+  obj.userData.orbitEcc = e;
+  obj.userData.orbitOrient = orient;
 
-  const p = orbitPoint(r, obj.userData.orbitAngle, incl, omega);
+  const p = orbitPoint(r, obj.userData.orbitAngle, incl, omega, e, orient);
   obj.userData.baseX = p.x;
   obj.userData.baseY = p.y;
   obj.userData.baseZ = p.z;
@@ -387,7 +393,7 @@ function buildRootView(universeData) {
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega);
+    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega, 0.05 + Math.random() * 0.10, Math.random() * Math.PI * 2);
     addLabel(obj, node, 6, 28, 18);
     currentObjects.push(obj);
   });
@@ -449,7 +455,9 @@ function buildDirectoryView(node) {
   const files = children.filter(c => c.type === 'MARKDOWN_FILE');
 
   const center = new THREE.Vector3(0, 0, 0);
-  const centralObj = createBody(renderer.scene, node, center, 0);
+  // Le soleil central a TOUJOURS sa propre représentation (étoile), quel que
+  // soit le niveau : c'est lui que les corps célestes du dossier orbitent.
+  const centralObj = createStar(renderer.scene, node, center, 0);
   centralObj.userData.clickable = false;
   currentObjects.push(centralObj);
 
@@ -466,9 +474,16 @@ function buildDirectoryView(node) {
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    setOrbit(obj, pos, planes[i].incl, planes[i].omega);
+    const ecc = 0.04 + Math.random() * 0.10;   // ellipse légère, Soleil au foyer
+    const orient = Math.random() * Math.PI * 2;
+    setOrbit(obj, pos, planes[i].incl, planes[i].omega, ecc, orient);
 
-    const orbit = createOrbit(renderer.scene, center, pos.length(), ORBIT_COLOR[childType], obj.userData.orbitIncl, obj.userData.orbitOmega);
+    const orbit = createOrbit(
+      renderer.scene, center, pos.length(),
+      ORBIT_COLOR[childType],
+      obj.userData.orbitIncl, obj.userData.orbitOmega,
+      ecc, orient,
+    );
     orbitObjects.push(orbit);
 
     addLabel(obj, child, spec.dy, spec.font, spec.width);
@@ -485,7 +500,7 @@ function buildDirectoryView(node) {
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega);
+    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega, 0.05 + Math.random() * 0.10, Math.random() * Math.PI * 2);
     addLabel(obj, child, LABEL_SPEC[VisualType.MOON].dy, LABEL_SPEC[VisualType.MOON].font, LABEL_SPEC[VisualType.MOON].width);
     currentObjects.push(obj);
   });
@@ -864,7 +879,11 @@ function animateObjects(time) {
       const speed = obj.userData.orbitSpeed ?? 0.03;
       const angle = baseAngle + t * speed;
       const r = obj.userData.orbitRadius;
-      const p = orbitPoint(r, angle, obj.userData.orbitIncl ?? 0, obj.userData.orbitOmega ?? 0);
+      const p = orbitPoint(
+        r, angle,
+        obj.userData.orbitIncl ?? 0, obj.userData.orbitOmega ?? 0,
+        obj.userData.orbitEcc ?? 0, obj.userData.orbitOrient ?? 0,
+      );
       obj.position.x = p.x;
       obj.position.y = p.y + Math.sin(t * 1.5 + i * 1.3) * 0.5;
       obj.position.z = p.z;
@@ -918,6 +937,15 @@ function animateObjects(time) {
         // Planètes, planètes naines, petits corps et lunes
         obj.rotation.y = isClickable ? (t * 0.08) : (t * 0.01);
         break;
+    }
+
+    // Soleils (centraux ou en orbite) : pulsation douce + animation GPU des
+    // shaders (plasma, couronne, protubérances). Indépendant du type du nœud :
+    // un soleil central peut être un amas/planète dans la taxonomie.
+    if (obj.userData.type === 'star') {
+      const pulse = 1 + Math.sin(t * 2.2 + i * 1.7) * 0.035;
+      obj.scale.setScalar(pulse);
+      (obj.userData.sunUniforms || []).forEach(u => { u.value = t; });
     }
 
     // Gentle float (locked oscillation around baseY to prevent accumulation drift)

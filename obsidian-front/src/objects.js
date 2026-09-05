@@ -48,6 +48,11 @@ export function starRadius(node) {
   return (8 + Math.min(node.markdownCount * 0.3, 12)) * 2.6;
 }
 
+/** Rayon visuel d'une étoile-enfant (point brillant, jamais un soleil complet). */
+export function compactStarRadius(node) {
+  return (2.5 + Math.min(node.markdownCount * 0.15, 3.5)) * 2.2;
+}
+
 export function planetRadius(node) {
   return (4 + Math.min(node.markdownCount * 0.5, 8)) * 1.8;
 }
@@ -74,7 +79,7 @@ export function bodyRadius(node) {
     case VisualType.SUPERCLUSTER: return superclusterRadius(node);
     case VisualType.CLUSTER:      return clusterRadius(node);
     case VisualType.GALAXY:       return galaxyRadius(node);
-    case VisualType.STAR:         return starRadius(node);
+    case VisualType.STAR:         return compactStarRadius(node);
     case VisualType.DWARF_PLANET: return dwarfPlanetRadius(node);
     case VisualType.SMALL_BODY:   return smallBodyRadius(node);
     case VisualType.PLANET:       return planetRadius(node);
@@ -257,7 +262,89 @@ export function createCluster(scene, node, position, index) {
 }
 
 /**
- * Build a Star mesh — glowing ringed sphere
+ * Texture procédurale des étoiles lointaines : cœur bokeh rond + croix de
+ * diffraction anamorphique (spikes horizontaux/verticaux). Générée une fois,
+ * partagée par toutes les étoiles-compactes.
+ */
+let _starSpikeTex = null;
+function starSpikeTexture() {
+  if (_starSpikeTex) return _starSpikeTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const cx = 128, cy = 128;
+
+  // Noyau bokeh
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 128);
+  core.addColorStop(0.00, 'rgba(255,255,255,1)');
+  core.addColorStop(0.22, 'rgba(255,255,255,0.55)');
+  core.addColorStop(0.55, 'rgba(255,255,255,0.10)');
+  core.addColorStop(1.00, 'rgba(255,255,255,0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Spikes : rayons très allongés, doux
+  ctx.globalCompositeOperation = 'lighter';
+  const spike = (rot) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.scale(1, 0.14);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 128);
+    g.addColorStop(0.00, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.30, 'rgba(255,255,255,0.35)');
+    g.addColorStop(1.00, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-128, -128, 256, 256);
+    ctx.restore();
+  };
+  spike(0);
+  spike(Math.PI / 2);
+
+  _starSpikeTex = new THREE.CanvasTexture(c);
+  return _starSpikeTex;
+}
+
+/**
+ * Étoile compacte — représentation d'un nœud « étoile » en orbite autour d'un
+ * autre astre. Évite de voir plusieurs soleils complets dans une même vue :
+ * seuls des billboards à croix de diffraction, et le dossier devient un vrai
+ * soleil à l'entrée.
+ */
+function createCompactStar(scene, node, position, index) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.userData = { node, type: 'star', index };
+
+  const color = pickColor(COLORS.star, index);
+  const size = 2.5 + Math.min(node.markdownCount * 0.15, 3.5);
+  group.userData.visualRadius = compactStarRadius(node);
+
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: starSpikeTexture(),
+    color,
+    transparent: true, opacity: 0.95,
+    depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  sprite.scale.set(size * 6, size * 6, 1);
+  group.add(sprite);
+
+  // Sphère de clic invisible : cible fiable et taille constante.
+  const hit = new THREE.Mesh(
+    new THREE.SphereGeometry(size * 1.8, 8, 8),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  hit.userData = { isCore: true };
+  group.add(hit);
+
+  scene.add(group);
+  return group;
+}
+
+/**
+ * Build a Star mesh — sun with GPU-animated plasma surface, volumetric corona
+ * and solar eruptive particles. Everything animates in the shaders (uTime),
+ * zero per-frame CPU cost.
  */
 export function createStar(scene, node, position, index) {
   const group = new THREE.Group();
@@ -266,39 +353,286 @@ export function createStar(scene, node, position, index) {
 
   const color = pickColor(COLORS.star, index);
   const size = 8 + Math.min(node.markdownCount * 0.3, 12);
-  group.userData.visualRadius = starRadius(node);   // anneau + lueur
+  group.userData.visualRadius = starRadius(node);   // couronne + lueur
 
-  // Cœur d'étoile : émissif fort, il doit paraître être sa propre source
-  // de lumière et non une bille éclairée de l'extérieur.
-  const coreGeo = new THREE.SphereGeometry(size, 32, 32);
-  const coreMat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    // Émissif modéré : au-delà de ~0.5, le tonemapping ACES fait virer
-    // l'astre au blanc et on perd le codage par couleur.
-    emissiveIntensity: 0.4,
-    roughness: 0.5,
-    metalness: 0.0,
+  // `sunUniforms` est alimenté par animateObjects pour animer tous les shaders
+  // du soleil (bouture plasma, couronne, protubérances) d'un seul coup.
+  const sunUniforms = [];
+
+  // ── Surface plasma animée ──
+  // Shader 100 % GPU : fBm avec domain warp qui « bout » en continu,
+  // granulation (taches claires/sombres), assombrissement du limbe,
+  // et éruptions brillantes localisées qui passent.
+  const plasmaMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(color) },
+      uSize: { value: size },
+    },
+    vertexShader: `
+      varying vec3 vN;
+      varying vec3 vWorld;
+      void main() {
+        vN = normalize(mat3(modelMatrix) * normal);
+        vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uColor;
+      uniform float uSize;
+      varying vec3 vN;
+      varying vec3 vWorld;
+
+      float hash(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+      }
+      float noise(vec3 x) {
+        vec3 i = floor(x);
+        vec3 f = fract(x);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(mix(hash(i + vec3(0.0,0.0,0.0)), hash(i + vec3(1.0,0.0,0.0)), f.x),
+              mix(hash(i + vec3(0.0,1.0,0.0)), hash(i + vec3(1.0,1.0,0.0)), f.x), f.y),
+          mix(mix(hash(i + vec3(0.0,0.0,1.0)), hash(i + vec3(1.0,0.0,1.0)), f.x),
+              mix(hash(i + vec3(0.0,1.0,1.0)), hash(i + vec3(1.0,1.0,1.0)), f.x), f.y),
+          f.z);
+      }
+      float fbm(vec3 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+          v += a * noise(p);
+          p = p * 2.05;
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        vec3 q = vWorld / uSize;
+
+        // Le plasma « bout » : le bruit domine le domaine de façon continue
+        float wob = fbm(q * 3.0 + vec3(uTime * 0.15, uTime * 0.1, 0.0));
+        vec3 p = q + vec3(wob * 0.7, wob * 0.45, wob * 0.3);
+        float n = fbm(p * 2.2 + vec3(0.0, uTime * 0.06, 0.0));
+
+        // Granulation : taches chaudes vs pores sombres
+        float spot = smoothstep(0.40, 0.72, n);
+
+        // Palette plasma : rouge profond → orange → jaune chauffé
+        vec3 deep = vec3(0.55, 0.12, 0.02);
+        vec3 mid  = vec3(1.00, 0.45, 0.05);
+        vec3 hot  = vec3(1.00, 0.86, 0.42);
+
+        vec3 col = mix(deep, mid, spot);
+        col = mix(col, hot, smoothstep(0.55, 0.92, n) * 0.85);
+        col *= 0.7 + 0.55 * spot;
+
+        // Assombrissement du limbe (là où la surface est tangentielle à la vue)
+        vec3 viewDir = normalize(cameraPosition - vWorld);
+        float fres = 1.0 - abs(dot(normalize(vN), viewDir));
+        col *= 1.0 - pow(fres, 2.2) * 0.7;
+
+        // Éruptions brillantes localisées qui dérivent à la surface
+        float burst = smoothstep(0.80, 0.98, fbm(q * 5.0 + vec3(uTime * 0.3, uTime * 0.2, 0.0)));
+        col = mix(col, vec3(1.0, 0.95, 0.75) * 1.5, burst * 0.45);
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
   });
-  const core = new THREE.Mesh(coreGeo, coreMat);
-  core.userData = { isCore: true };
+  sunUniforms.push(plasmaMat.uniforms.uTime);
+
+  const core = new THREE.Mesh(new THREE.SphereGeometry(size, 48, 48), plasmaMat);
+  core.userData = { isCore: true, isSun: true };
   group.add(core);
 
-  addGlow(group, color, size * 2.6, 0.75);
+  // ── Couronne volumique ──
+  // Sphère BackSide additive : anneau lumineux irrégulier qui scintille grâce
+  // au bruit, densité plus forte près du disque, filaments vers l'extérieur.
+  const coronaMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(color) },
+      uSize: { value: size },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    vertexShader: `
+      varying vec3 vN;
+      varying vec3 vWorld;
+      void main() {
+        vN = normalize(mat3(modelMatrix) * normal);
+        vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uColor;
+      uniform float uSize;
+      varying vec3 vN;
+      varying vec3 vWorld;
 
-  // Anneau fin et lumineux plutôt qu'un large disque translucide
+      float hash(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+      }
+      float noise(vec3 x) {
+        vec3 i = floor(x);
+        vec3 f = fract(x);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(mix(hash(i + vec3(0.0,0.0,0.0)), hash(i + vec3(1.0,0.0,0.0)), f.x),
+              mix(hash(i + vec3(0.0,1.0,0.0)), hash(i + vec3(1.0,1.0,0.0)), f.x), f.y),
+          mix(mix(hash(i + vec3(0.0,0.0,1.0)), hash(i + vec3(1.0,0.0,1.0)), f.x),
+              mix(hash(i + vec3(0.0,1.0,1.0)), hash(i + vec3(1.0,1.0,1.0)), f.x), f.y),
+          f.z);
+      }
+      float fbm(vec3 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * noise(p);
+          p = p * 2.05;
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        vec3 viewDir = normalize(cameraPosition - vWorld);
+        float fres = pow(1.0 - abs(dot(normalize(vN), viewDir)), 1.6);
+
+        float n = fbm(vWorld / (uSize * 0.42) + vec3(uTime * 0.03, uTime * 0.02, 0.0));
+        // Filaments radiaux : plus fins vers l'extérieur
+        float filaments = fbm(normalize(vWorld) * 3.0 + uTime * 0.05 + n);
+        float glow = fres * (0.35 + 0.7 * n) * (0.6 + 0.6 * filaments);
+
+        gl_FragColor = vec4(uColor * glow * 2.2, glow * 0.85);
+      }
+    `,
+  });
+  sunUniforms.push(coronaMat.uniforms.uTime);
+
+  const corona = new THREE.Mesh(new THREE.SphereGeometry(size * 2.4, 32, 32), coronaMat);
+  group.add(corona);
+
+  // ── Protubérances / éruptions solaires ──
+  // Particules animées par le vertex shader : elles jaillissent de la surface
+  // le long d'une boucle magnétique, s'éloignent puis s'éteignent. zéro CPU.
+  const N_ERUPT = 700;
+  const origin = new Float32Array(N_ERUPT * 3);
+  const dir = new Float32Array(N_ERUPT * 3);
+  const seed = new Float32Array(N_ERUPT);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < N_ERUPT; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    v.set(
+      Math.sin(phi) * Math.cos(theta),
+      Math.cos(phi),
+      Math.sin(phi) * Math.sin(theta),
+    );
+    const r0 = size * (1.02 + Math.random() * 0.12);
+    origin[i * 3] = v.x * r0;
+    origin[i * 3 + 1] = v.y * r0;
+    origin[i * 3 + 2] = v.z * r0;
+    const d = v.clone().add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.35,
+      (Math.random() - 0.5) * 0.35,
+      (Math.random() - 0.5) * 0.35,
+    )).normalize();
+    dir[i * 3] = d.x;
+    dir[i * 3 + 1] = d.y;
+    dir[i * 3 + 2] = d.z;
+    seed[i] = Math.random();
+  }
+  const eruptGeo = new THREE.BufferGeometry();
+  eruptGeo.setAttribute('position', new THREE.BufferAttribute(origin, 3));
+  eruptGeo.setAttribute('aDir', new THREE.BufferAttribute(dir, 3));
+  eruptGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  // Grosse bounding sphere : les particules s'éloignent bien au-delà de la
+  // surface, sinon le frustum culling les couperait.
+  eruptGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), size * 6);
+
+  const eruptMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(color) },
+      uSize: { value: size },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute vec3 aDir;
+      attribute float aSeed;
+      uniform float uTime;
+      uniform float uSize;
+      varying float vAlpha;
+      varying float vBright;
+      void main() {
+        // Cycle : chaque particule a une éruption périodique déphasée
+        float t = fract(uTime * 0.14 + aSeed);
+
+        // Trajectoire : éjection radiale accélérée + dérive latérale ondulée
+        vec3 p = position
+          + aDir * (t * t * uSize * 3.0)
+          + vec3(sin(t * 6.283 + aSeed * 100.0), 0.0, cos(t * 6.283 + aSeed * 90.0))
+              * (t * uSize * 0.9);
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = (3.2 - t * 2.0) * (320.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+
+        vAlpha = (1.0 - t) * (1.0 - t * 0.5);
+        vBright = 0.4 + 0.6 * sin(t * 3.1415);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      varying float vBright;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float a = smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(uColor * vBright * 1.8, a * vAlpha);
+      }
+    `,
+  });
+  sunUniforms.push(eruptMat.uniforms.uTime);
+
+  const eruptions = new THREE.Points(eruptGeo, eruptMat);
+  group.add(eruptions);
+
+  group.userData.sunUniforms = sunUniforms;
+
+  // Lueur diffuse en sprite derrière la couronne : donne de la profondeur.
+  addGlow(group, color, size * 2.2, 0.45);
+
+  // Disque protoplanétaire : anneau fin et lumineux
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(size * 1.55, size * 1.95, 96),
     new THREE.MeshBasicMaterial({
       color, side: THREE.DoubleSide,
-      transparent: true, opacity: 0.9, depthWrite: false,
+      transparent: true, opacity: 0.7, depthWrite: false,
       blending: THREE.AdditiveBlending,
     }),
   );
   ring.rotation.x = Math.PI / 2.5;
   group.add(ring);
 
-  group.add(new THREE.PointLight(color, 1.1, size * 16));
+  // Vraie source de lumière : la scène est éclairée par l'étoile.
+  group.add(new THREE.PointLight(color, 1.4, size * 18));
 
   scene.add(group);
   return group;
@@ -317,16 +651,21 @@ export function createPlanet(scene, node, position, index) {
   group.userData.visualRadius = planetRadius(node);   // atmosphère + anneau éventuel
 
   // Planet sphere with texture-like variation
+  // Émissif quasi nul : éclairé par le Soleil central (proche PointLight), la
+  // moitié nuit reste dans l'ombre → phases réelles (terminateur visible).
   const geo = new THREE.SphereGeometry(size, 32, 32);
   const mat = new THREE.MeshStandardMaterial({
     color,
     emissive: color,
-    emissiveIntensity: 0.2,
+    emissiveIntensity: 0.06,
     roughness: 0.6,
     metalness: 0.1,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
+  // Obliquité axiale : l'axe de rotation est incliné (comme sur Terre)
+  mesh.rotation.z = (Math.random() - 0.5) * 1.2;
+  mesh.rotation.x = (Math.random() - 0.5) * 0.5;
   group.add(mesh);
 
   addGlow(group, color, size * 1.9, 0.45);   // atmosphère
@@ -430,10 +769,11 @@ export function createMoon(scene, node, position, index) {
     roughness: 0.55,
     metalness: 0.0,
     emissive: color,
-    emissiveIntensity: 0.55,
+    emissiveIntensity: 0.12,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
+  mesh.rotation.z = (Math.random() - 0.5) * 1.9;
   group.add(mesh);
 
   // Lueur discrète : les lunes sont minuscules, sans elle elles
@@ -447,15 +787,25 @@ export function createMoon(scene, node, position, index) {
 /**
  * Create an orbit trail ellipse for orbital mechanics feel.
  *
+ * L'ellipse est tracée avec le Soleil au foyer (origine) : x = a·cos(θ) − a·e,
+ * comme `orbitPoint` dans main.js — le tracé et l'astre partagent le plan et
+ * le foyer.
+ *
  * @param {number} incl  inclinaison en radians — tilt du plan orbital
  * @param {number} omega longitude du nœud ascendant en radians — rotation du plan autour de Y
+ * @param {number} e     excentricité (0 = cercle)
+ * @param {number} orient rotation dans le plan (orientation du péricentre)
  */
-export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, omega = 0) {
+export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, omega = 0, e = 0, orient = 0) {
   const points = [];
   const segments = 128;
+  const b = radius * Math.sqrt(Math.max(0, 1 - e * e));
+  const c = radius * e;
   for (let i = 0; i <= segments; i++) {
-    const angle = (i / segments) * Math.PI * 2;
-    points.push(new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
+    const angle = orient + (i / segments) * Math.PI * 2;
+    const lx = radius * Math.cos(angle) - c;
+    const lz = b * Math.sin(angle);
+    points.push(new THREE.Vector3(lx, 0, lz));
   }
   const geo = new THREE.BufferGeometry().setFromPoints(points);
 
@@ -542,7 +892,7 @@ export function createBody(scene, node, position, index) {
     case VisualType.SUPERCLUSTER: return createSupercluster(scene, node, position, index);
     case VisualType.CLUSTER:      return createCluster(scene, node, position, index);
     case VisualType.GALAXY:       return createGalaxy(scene, node, position, index);
-    case VisualType.STAR:         return createStar(scene, node, position, index);
+    case VisualType.STAR:         return createCompactStar(scene, node, position, index);
     case VisualType.DWARF_PLANET: return createDwarfPlanet(scene, node, position, index);
     case VisualType.SMALL_BODY:   return createSmallBody(scene, node, position, index);
     case VisualType.PLANET:       return createPlanet(scene, node, position, index);
