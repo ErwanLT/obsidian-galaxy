@@ -63,79 +63,8 @@ export class GalaxyRenderer {
 
     this._buildStars();
     this._buildNebula();
-    this._buildMilkyWay();
     this._buildDistantGalaxies();
     this._buildComposer();
-  }
-
-  /**
-   * Voie lactée procédurale : un dôme shader (BackSide) qui dessine la bande
-   * de notre galaxie avec poussière, éclaircissements et quelques étoiles.
-   * `fog: false` par défaut sur un ShaderMaterial : le brouillard qui estompe
-   * étoiles et nébuleuses ne l'éteindra pas, malgré ses 5200 unités.
-   */
-  _buildMilkyWay() {
-    const mat = new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      transparent: true,
-      uniforms: { uTime: { value: 0 } },
-      vertexShader: `
-        varying vec3 vDir;
-        void main() {
-          vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform float uTime;
-        varying vec3 vDir;
-
-        float hash(vec2 p) {
-          p = fract(p * 0.3183099 + 0.1);
-          p *= 17.0;
-          return fract(p.x * p.y * (p.x + p.y));
-        }
-        float noise(vec2 p) {
-          vec2 i = floor(p);
-          vec2 f = fract(p);
-          f = f * f * (3.0 - 2.0 * f);
-          return mix(
-            mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-            mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
-            f.y);
-        }
-
-        void main() {
-          vec3 dir = normalize(vDir);
-          // Plan galactique incliné : bande dense autour d'un grand cercle
-          float band = 1.0 - abs(dot(dir, normalize(vec3(0.42, 0.62, 0.66))));
-
-          // Poussière et nuages le long de la bande (stables dans le temps)
-          vec2 uv = vec2(atan(dir.z, dir.x) * 6.0, asin(dir.y) * 4.0);
-          float n = noise(uv * 3.0);
-          n += 0.5 * noise(uv * 9.0);
-          n *= 0.7;
-
-          float bandI = smoothstep(0.42, 0.06, band) * 0.55;
-
-          vec3 col = vec3(0.012, 0.010, 0.030);
-          col += vec3(0.30, 0.27, 0.55) * bandI * (0.35 + 0.65 * n);
-          col += vec3(0.60, 0.62, 0.95) * bandI * band * 2.2;
-
-          // Étoiles lointaines brillantes dans le plan, scintillantes
-          float tw = 0.5 + 0.5 * sin(uTime * 2.0 + floor(uv * 700.0).x * 40.0);
-          float starMask = smoothstep(0.990, 1.000, hash(floor(uv * 900.0)));
-          col += vec3(0.80, 0.85, 1.0) * starMask * band * 1.4 * tw;
-
-          gl_FragColor = vec4(col, 1.0);
-        }
-      `,
-    });
-    this.sky = new THREE.Mesh(new THREE.SphereGeometry(5200, 48, 24), mat);
-    this.sky.frustumCulled = false;
-    this.sky.renderOrder = -10;
-    this.scene.add(this.sky);
   }
 
   _buildComposer() {
@@ -293,12 +222,9 @@ export class GalaxyRenderer {
 
   tick(t) {
     if (this.stars) this.stars.rotation.y = t * 0.00003;
-    if (this.sky) this.sky.rotation.y = t * 0.000003;
     this.controls.update();
 
     if (this.composer) {
-      // uTime du dôme en secondes : scintillement lent des étoiles de la Voie lactée
-      this.sky.material.uniforms.uTime.value = t * 0.001;
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);
