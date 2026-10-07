@@ -68,7 +68,7 @@ function folderContent(node) {
  * @param onEnter     entrer dans le dossier
  * @param onEntry     clic sur une ligne (enfant d'un dossier, ou note liée)
  */
-export function renderPanel(node, { isCurrent, onEnter, onEntry }) {
+export function renderPanel(node, { isCurrent, onEnter, onEntry, onPath }) {
   const vt = node.visualType;
   const isNote = node.type === 'MARKDOWN_FILE';
   const badge = $('info-badge');
@@ -108,9 +108,35 @@ export function renderPanel(node, { isCurrent, onEnter, onEntry }) {
   btnEnter.style.display = canEnter ? 'flex' : 'none';
   btnEnter.onclick = canEnter ? onEnter : null;
 
+  const btnPath = $('btn-path');
+  btnPath.style.display = isNote && onPath ? 'flex' : 'none';
+  btnPath.onclick = isNote && onPath ? onPath : null;
+
   const btnObsidian = $('btn-open-obsidian');
   btnObsidian.style.display = isNote ? 'flex' : 'none';
   btnObsidian.onclick = isNote && node.path
     ? () => { window.location.href = `obsidian://open?path=${encodeURIComponent(node.path)}`; }
     : null;
+}
+
+/** Panneau d'un chemin entre deux notes : chaque étape est cliquable. */
+export function renderPathPanel(path, from, to, onStep) {
+  const badge = $('info-badge');
+  badge.textContent = 'Chemin';
+  badge.className = 'path';
+  $('info-name').textContent = `${from.name} → ${to.name}`;
+  $('info-path').textContent = path.length
+    ? `${path.length - 1} lien${path.length > 2 ? 's' : ''} à suivre`
+    : 'Aucune chaîne de liens ne relie ces deux notes.';
+  $('info-stats').innerHTML = statRows([
+    ['Départ', from.name],
+    ['Arrivée', to.name],
+    ['Étapes', path.length ? path.length - 2 : '—'],
+  ]);
+  $('info-children-title').textContent = 'Étapes';
+  const list = $('info-children');
+  list.innerHTML = '';
+  path.forEach((n, i) => list.appendChild(panelItem(n.name, n.visualType, `${i + 1}`, () => onStep(n))));
+  $('info-children-section').style.display = path.length ? '' : 'none';
+  for (const id of ['btn-enter', 'btn-open-obsidian', 'btn-path']) $(id).style.display = 'none';
 }

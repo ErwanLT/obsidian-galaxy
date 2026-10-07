@@ -185,6 +185,36 @@ export class Constellation {
 
     this.focus = null;
     this.filter = 'all';
+    this.path = null;
+    this.pathLine = null;
+  }
+
+  /** Met en évidence un chemin de notes (tableau ordonné), ou l'efface (null). */
+  setPath(path) {
+    if (this.pathLine) {
+      this.group.remove(this.pathLine);
+      disposeTree(this.pathLine);
+      this.pathLine = null;
+    }
+    this.path = path && path.length ? path : null;
+    if (this.path && this.path.length > 1) {
+      const pts = [];
+      for (let k = 1; k < this.path.length; k++) {
+        pts.push(this.positions[this.index.get(this.path[k - 1])], this.positions[this.index.get(this.path[k])]);
+      }
+      this.pathLine = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      this.group.add(this.pathLine);
+    }
+    this.recolor();
+  }
+
+  /** Boîte englobante d'un ensemble de notes (pour cadrer un chemin). */
+  boundsOf(notes) {
+    const box = new THREE.Box3().setFromPoints(notes.map(n => this.positions[this.index.get(n)]));
+    return { center: box.getCenter(new THREE.Vector3()), radius: Math.max(20, box.getSize(new THREE.Vector3()).length() / 2) };
   }
 
   bounds() {
@@ -258,13 +288,18 @@ export class Constellation {
   recolor() {
     const col = this.points.geometry.attributes.color;
     const linked = this.focus ? new Set([this.focus, ...(this.focus._out || []), ...(this.focus._in || [])]) : null;
+    const onPath = this.path ? new Set(this.path) : null;
     this.notes.forEach((nd, i) => {
-      const on = this.matches(nd) && (!linked || linked.has(nd));
-      const k = on ? (linked && nd === this.focus ? 1.6 : 1) : DIM;
+      let k;
+      if (onPath) k = onPath.has(nd) ? 1.8 : DIM;
+      else {
+        const on = this.matches(nd) && (!linked || linked.has(nd));
+        k = on ? (linked && nd === this.focus ? 1.6 : 1) : DIM;
+      }
       col.setXYZ(i, this.baseColors[i * 3] * k, this.baseColors[i * 3 + 1] * k, this.baseColors[i * 3 + 2] * k);
     });
     col.needsUpdate = true;
-    this.lines.material.opacity = this.focus ? 0.03 : this.filter === 'all' ? 0.1 : 0.04;
+    this.lines.material.opacity = this.path || this.focus ? 0.03 : this.filter === 'all' ? 0.1 : 0.04;
   }
 
   /** Nombre de notes retenues par le filtre courant. */

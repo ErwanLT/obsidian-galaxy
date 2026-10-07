@@ -49,6 +49,8 @@ export class SearchPalette {
     this.entries = [];
     this.hits = [];
     this.active = 0;
+    this.pickOverride = null;
+    this.defaultPlaceholder = input.placeholder;
 
     input.addEventListener('input', () => this.render(input.value));
     input.addEventListener('keydown', e => {
@@ -86,11 +88,22 @@ export class SearchPalette {
 
   close() {
     this.overlay.classList.add('hidden');
+    this.pickOverride = null;
+    this.input.placeholder = this.defaultPlaceholder;
+  }
+
+  /** Ouvre la palette pour choisir une note, puis appelle `cb` (au lieu de naviguer). */
+  openPicker(placeholder, cb) {
+    this.pickOverride = cb;
+    this.open();
+    this.input.placeholder = placeholder;
   }
 
   pick(entry) {
+    const override = this.pickOverride;
     this.close();
-    this.onPick(entry);
+    if (override) override(entry);
+    else this.onPick(entry);
   }
 
   setActive(i) {

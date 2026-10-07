@@ -6,7 +6,8 @@ import { createBody, createStar, createOrbit, disposeTree, seededRandom, nodeSee
 import { discLayout, orbitLayout, placeMoons, orbitPoint, setOrbit, orbitShape } from './layout.js';
 import { esc, dot } from './dom.js';
 import { SearchPalette } from './search.js';
-import { renderPanel } from './panel.js';
+import { renderPanel, renderPathPanel } from './panel.js';
+import { shortestPath } from './graph.js';
 import { LabelLayer } from './labels.js';
 import { LinkGraph } from './links.js';
 import { hashFor, nodeForHash } from './url.js';
@@ -26,6 +27,7 @@ let constellation = null;    // vue globale du vault (null = vue système)
 let constellationReturn = null;
 let constSelected = null;    // repère de la note sélectionnée dans la constellation
 let constHovered = null;
+let currentPath = null;      // chemin affiché dans la constellation (notes ordonnées)
 const CONSTELLATION_HASH = '#/@constellation';
 let showLabels = true;
 let selectedObject = null;
@@ -102,6 +104,7 @@ function clearScene() {
     constellation = null;
     constSelected = null;
     constHovered = null;
+    currentPath = null;
     document.body.classList.remove('is-constellation');
     document.getElementById('constellation-bar').hidden = true;
   }
@@ -460,7 +463,14 @@ function showInfoPanel(node) {
     isCurrent: node === currentNode,
     onEnter: () => enterNode(node),
     onEntry: n => (node.type === 'MARKDOWN_FILE' ? goToNote(n) : openChild(n)),
+    onPath: () => search.openPicker(`Chemin depuis « ${node.name} » vers…`, entry => {
+      if (entry.node.type === 'MARKDOWN_FILE') showPath(node, entry.node);
+    }),
   });
+  openPanel();
+}
+
+function openPanel() {
   infoPanel.classList.remove('panel-hidden');
   infoPanel.classList.add('panel-visible');
   // Recentre la scène dans l'espace laissé libre : à gauche du panneau sur
@@ -601,6 +611,7 @@ function onClick(event) {
     const isDouble = note && now - lastClickTime < 350;
     lastClickTime = now;
     if (isDouble) goToNote(note);   // double-clic : on rejoint la note dans son système
+    else if (event.shiftKey && note && constSelected) showPath(constSelected.userData.node, note);
     else selectStar(note);
     return;
   }
@@ -712,7 +723,25 @@ function setConstellationFilter(kind) {
   document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
 }
 
+/** Chemin le plus court entre deux notes, affiché dans la constellation. */
+function showPath(from, to) {
+  if (!constellation) enterConstellation();
+  currentPath = shortestPath(from, to);
+  constSelected = null;
+  constellation.setFocus(null);
+  constellation.setPath(currentPath);
+  renderPathPanel(currentPath, from, to, n => selectStar(n));
+  openPanel();
+  const { center, radius } = constellation.boundsOf(currentPath.length ? currentPath : [from, to]);
+  const dir = renderer.camera.position.clone().sub(center).normalize();
+  renderer.flyTo(center.clone().addScaledVector(dir, radius * 2.6 + 60), center, 1000);
+}
+
 function selectStar(note) {
+  if (currentPath && !currentPath.includes(note)) {
+    currentPath = null;
+    constellation.setPath(null);
+  }
   constSelected = note ? constellation.proxyOf(note) : null;
   constellation.setFocus(note);
   if (!note) {
@@ -792,6 +821,8 @@ function navigateFromUrl(cam = null) {
 /** Fermeture du panneau par l'utilisateur : l'URL revient au dossier affiché. */
 function closePanel() {
   if (constellation) {
+    currentPath = null;
+    constellation.setPath(null);
     selectStar(null);
     return;
   }
@@ -968,6 +999,41 @@ function recenter() {
   frameCurrentView(700);
 }
 
+function isHelpOpen() {
+  return !document.getElementById('help-overlay').classList.contains('hidden');
+}
+
+function toggleHelp() {
+  document.getElementById('help-overlay').classList.toggle('hidden');
+}
+
+// Repli pour les navigateurs qui refusent l'API presse-papiers (contexte non sécurisé…).
+function copyWithSelection(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  return ok;
+}
+
+async function copyLink() {
+  const btn = document.getElementById('btn-copy-link');
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(location.href);
+    ok = true;
+  } catch {
+    ok = copyWithSelection(location.href);
+  }
+  btn.dataset.state = ok ? 'done' : 'error';
+  setTimeout(() => { delete btn.dataset.state; }, 1600);
+}
+
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.();
@@ -980,6 +1046,7 @@ function focusSet() {
   const set = new Set();
   if (constellation) {
     if (constHovered) set.add(constHovered);
+    for (const n of currentPath || []) set.add(constellation.proxyOf(n));
     if (constSelected) {
       set.add(constSelected);
       for (const o of constellation.neighborsOf(constSelected.userData.node)) set.add(o);
@@ -1098,6 +1165,11 @@ async function init() {
   // ── Header ──
   btnSearch?.addEventListener('click', () => search.open());
   btnFullscreen?.addEventListener('click', toggleFullscreen);
+  document.getElementById('btn-help')?.addEventListener('click', toggleHelp);
+  document.getElementById('help-overlay')?.addEventListener('click', e => {
+    if (e.target.id === 'help-overlay' || e.target.closest('.help-close')) toggleHelp();
+  });
+  document.getElementById('btn-copy-link')?.addEventListener('click', copyLink);
 
   // ── Toolbar ──
   document.getElementById('btn-tool-zoom-in')?.addEventListener('click', () => zoomBy(0.25));
@@ -1113,6 +1185,10 @@ async function init() {
   // ── Recherche ──
   // ── Raccourcis clavier ──
   window.addEventListener('keydown', (e) => {
+    if (isHelpOpen()) {
+      if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); toggleHelp(); }
+      return;
+    }
     if (search.isOpen) {
       if (e.key === 'Escape') { e.preventDefault(); search.close(); }
       return;   // la palette gère ses propres flèches / Entrée
@@ -1126,6 +1202,7 @@ async function init() {
     switch (e.key) {
       case 'Escape':    closePanel(); break;
       case 'g': case 'G': toggleConstellation(); break;
+      case '?': toggleHelp(); break;
       case ' ': e.preventDefault(); toggleOrbits(); break;
       case 'ArrowRight': e.preventDefault(); cycleSelection(1); break;
       case 'ArrowLeft':  e.preventDefault(); cycleSelection(-1); break;
