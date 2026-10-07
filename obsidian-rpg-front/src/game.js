@@ -1,488 +1,956 @@
-import { hashStr } from './universe.js';
-import { getTheme, makeThemeSprites, makePlayerFrames } from './sprites.js';
+import { generateRoom, DUNGEON, inRect } from './worldgen.js';
+import { getTheme, makeThemeSprites } from './sprites.js';
+import { bfsField, stepDown, lineOfSight, questWaypoint, levelFromXp, maxHpFor, xpForLevel } from './nav.js';
+import { RARITY, childToward, isAncestor } from './universe.js';
+import { updateMonster, updateBoss, updateProjectiles, splitOnDeath, angleDiff } from './creatures.js';
+import { PERK_BY_ID } from './perks.js';
+import { RELIC_BY_ID, assignRelics, relicCounts } from './relics.js';
+import { pickDaily, today } from './daily.js';
 
 export const TILE = 8;
-const VIEW_W = 40;
-const VIEW_H = 24;
-const W = 24;
-const H = 16;
-const OFF_X = ((VIEW_W - W) / 2) * TILE;
-const OFF_Y = ((VIEW_H - H) / 2) * TILE;
-const NOTE_CAP = 8;
+export const VIEW_W = 40;
+export const VIEW_H = 24;
 const SPEED = 4.2;
-const SIGHT = 6.0;
-const PLAYER_MAX_HP = 5;
-const LEVEL_XP = 8;
+const SIGHT = 6.5;
 const ATTACK_CD = 0.32;
 const ATTACK_MAX = 2.2;
 const ATTACK_HALF = 0.7;
+const DROP_CHANCE = 0.2;
+const DODGE_TIME = 0.22;
+const DODGE_SPEED = 11;
+const DODGE_CD = 0.75;
+const SHIELD_ARC = 1.0;
+const ECHO_SHARE = 0.5;
+const LINK_XP = 3;
+const ORB_DELAY = 0.35;
+const MAGNET = 2.6;
+const CAM_PAD_X = 8;
+const CAM_PAD_TOP = 24;
+const CAM_PAD_BOTTOM = 20;
 
-const FACING = [
+export const FACING = [
   { x: 0, y: 1 },
   { x: 0, y: -1 },
   { x: -1, y: 0 },
   { x: 1, y: 0 },
 ];
 
-const MONSTER_TYPES = {
-  slime: { name: 'limaçon', hp: 2, xp: 2, speed: 1.1, dmg: 1, aggro: 6.6, scale: 1 },
-  wisp: { name: 'farceur', hp: 3, xp: 3, speed: 1.6, dmg: 1, aggro: 7.2, scale: 1 },
-};
-
-const BOSS = { name: 'Gardien de la voûte', hp: 16, xp: 8, speed: 0.95, dmg: 2 };
-
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const center = c => ({ x: c.x + 0.5, y: c.y + 0.5 });
+const NEAR = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [-1, 1], [1, -1], [-1, -1], [0, 2], [2, 0], [-2, 0], [0, -2]];
 
-function mulberry32(a) {
-  return function () {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function shuffle(arr, rand) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = (rand() * (i + 1)) | 0;
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
-  }
-  return arr;
+function freshPlayer() {
+  return { x: 0, y: 0, facing: 0, hp: maxHpFor(1), maxHp: maxHpFor(1), xp: 0, level: 1, invuln: 0, kx: 0, ky: 0 };
 }
 
 export class Game {
-  constructor(ctx, mctx, callbacks, sfxModule) {
-    this.ctx = ctx;
-    this.mctx = mctx;
+  constructor(callbacks, sfx) {
     this.cb = callbacks || {};
-    this.sfx = sfxModule.sfx;
-
+    this.sfx = sfx;
+    this.mode = DUNGEON;
+    this.world = null;
     this.byPath = null;
-    this.root = null;
     this.room = null;
+    this.roomState = new Map();
+    this.cam = { x: 0, y: 0 };
+    this.time = 0;
+    this.paused = false;
+    this.resetProgress();
+  }
+
+  resetProgress() {
     this.stack = [];
     this.visited = new Set();
     this.collected = new Set();
     this.defeatedBosses = new Set();
     this.achieved = new Set();
-    this.stats = { kills: 0, deaths: 0 };
-
-    this.player = {
-      x: W / 2,
-      y: H - 2,
-      facing: 0,
-      hp: PLAYER_MAX_HP,
-      maxHp: PLAYER_MAX_HP,
-      xp: 0,
-      level: 1,
-      invuln: 0,
-      kx: 0,
-      ky: 0,
-    };
+    this.stats = { kills: 0, deaths: 0, links: 0, reflects: 0, dodges: 0, stuns: 0, chests: 0, secrets: 0, unlocks: 0, dailies: 0, echoes: 0 };
+    this.perks = {};
+    this.pendingPerks = 0;
+    this.phoenixUsed = false;
+    this.relics = {};
+    this.seals = 0;
+    this.threads = new Set();
+    this.daily = null;
+    this.echo = null;
+    this.hints = new Set();
+    this.aegisLeft = 0;
+    this.xpFrac = 0;
+    this.player = freshPlayer();
+    this.quest = null;
+    this.questDir = null;
+    this.roomState = new Map();
+    this.dead = false;
     this.walking = false;
     this.walkT = 0;
     this.stepAccum = 0;
-    this.time = 0;
     this.attackCd = 0;
     this.attackT = 0;
-    this.flash = 0;
-    this.dead = false;
-    this.roomExplored = new Map();
-
+    this.dodgeT = 0;
+    this.dodgeCd = 0;
     this.prompt = null;
-    this.frames = makePlayerFrames();
-    this.visSet = new Set();
-    this._mmBuf = null;
+    this.dirty = true;
+    this.clearFx();
   }
 
-  setWorld({ root, byPath }) {
-    this.root = root;
-    this.byPath = byPath;
-    this.roomExplored = new Map();
+  clearFx() {
+    this.fx = { hitstop: 0, shakeT: 0, shakeDur: 1, shakeAmp: 0, floaters: [], sparks: [], ghosts: [] };
+  }
+
+  // ── Effets : purement visuels, aucun impact sur la logique ─────────
+
+  shake(amp, dur) {
+    const fx = this.fx;
+    if (amp >= fx.shakeAmp * (fx.shakeT / fx.shakeDur)) {
+      fx.shakeAmp = amp;
+      fx.shakeT = dur;
+      fx.shakeDur = dur;
+    }
+  }
+
+  freeze(t) {
+    this.fx.hitstop = Math.max(this.fx.hitstop, t);
+  }
+
+  float(x, y, text, color) {
+    this.fx.floaters.push({ x, y, text, color, t: 0, life: 0.8 });
+  }
+
+  burst(x, y, color, n, speed = 4) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const v = speed * (0.4 + Math.random() * 0.6);
+      this.fx.sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, color, t: 0, life: 0.35 + Math.random() * 0.35 });
+    }
+  }
+
+  updateFx(dt) {
+    const fx = this.fx;
+    fx.shakeT = Math.max(0, fx.shakeT - dt);
+    fx.floaters = fx.floaters.filter(f => (f.t += dt) < f.life);
+    fx.ghosts = fx.ghosts.filter(gh => (gh.t += dt) < 0.25);
+    fx.sparks = fx.sparks.filter(s => {
+      s.t += dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vx *= 0.9;
+      s.vy *= 0.9;
+      return s.t < s.life;
+    });
+  }
+
+  inSafe(x, y) {
+    return !!this.room && inRect(this.room.safe, Math.floor(x), Math.floor(y));
+  }
+
+  setWorld(world) {
+    this.world = world;
+    this.byPath = world.byPath;
+    this.roomState = new Map();
+    assignRelics(world);
+  }
+
+  newGame() {
+    this.resetProgress();
+    this.refreshBonuses();
+    this.ensureDaily();
+    this.goTo(this.world.root._key, { from: null });
   }
 
   restore(p) {
-    for (const path of p.collected || []) this.collected.add(path);
-    for (const b of p.bosses || []) this.defeatedBosses.add(b);
+    const has = path => this.byPath.has(path);
+    for (const path of p.collected || []) if (has(path)) this.collected.add(path);
+    for (const b of p.bosses || []) if (has(b)) this.defeatedBosses.add(b);
+    for (const v of p.visited || []) if (has(v)) this.visited.add(v);
     for (const a of p.achievements || []) this.achieved.add(a);
-    if (p.stats) {
-      this.stats.kills = p.stats.kills || 0;
-      this.stats.deaths = p.stats.deaths || 0;
+    for (const k of Object.keys(this.stats)) this.stats[k] = (p.stats && p.stats[k]) || 0;
+    for (const [id, n] of Object.entries(p.perks || {})) if (PERK_BY_ID[id]) this.perks[id] = n;
+    for (const t of p.threads || []) if (has(t)) this.threads.add(t);
+    for (const h of p.hints || []) this.hints.add(h);
+    if (p.daily && p.daily.date === today()) {
+      this.daily = { date: p.daily.date, targets: p.daily.targets.filter(has), done: new Set((p.daily.done || []).filter(has)), rewarded: !!p.daily.rewarded };
     }
-    this.player.maxHp = PLAYER_MAX_HP;
-    this.player.hp = p.hp != null ? p.hp : PLAYER_MAX_HP;
-    this.player.xp = p.xp || 0;
-    this.player.level = Math.max(1, 1 + Math.floor(this.player.xp / LEVEL_XP));
-    const target = p.stack && p.stack.length ? p.stack[p.stack.length - 1] : this.root._key;
-    const at = p.pos && Number.isFinite(p.pos.x) && Number.isFinite(p.pos.y) ? p.pos : null;
-    this.goTo(target, at);
+    if (p.echo && p.echo.xp > 0) this.echo = { ...p.echo };
+    const pl = this.player;
+    pl.xp = p.xp || 0;
+    pl.level = levelFromXp(pl.xp);
+    // Anciennes sauvegardes sans dons : on rattrape un don par niveau déjà gagné.
+    this.pendingPerks = p.perks ? p.pendingPerks || 0 : pl.level - 1;
+    this.refreshBonuses();
+    this.ensureDaily();
+    pl.hp = p.hp > 0 ? Math.min(pl.maxHp, p.hp) : pl.maxHp;
+    for (const [sk, r] of Object.entries(p.rooms || {})) {
+      this.roomState.set(sk, {
+        explored: null,
+        exploredFloor: 0,
+        killed: new Set(),
+        opened: !!r.o,
+        hasKey: !!r.k,
+        chests: new Set(r.c || []),
+        broken: new Set(r.b || []),
+      });
+    }
+    const q = p.quest && this.byPath.get(p.quest);
+    this.quest = q && !this.collected.has(q.path) ? q : null;
+
+    const last = p.stack && p.stack.length ? p.stack[p.stack.length - 1] : null;
+    const target = last && has(last) ? last : this.world.root._key;
+    const samePlace = target === last && p.mode === this.mode;
+    this.goTo(target, { from: null, at: samePlace ? p.pos : null });
   }
 
-  goTo(key, at) {
-    if (!this.byPath || !key) return;
-    const node = this.byPath.get(key);
-    if (!node) return;
+  snapshot() {
+    return {
+      mode: this.mode,
+      collected: [...this.collected],
+      visited: [...this.visited],
+      stack: [...this.stack],
+      pos: { x: this.player.x, y: this.player.y },
+      hp: this.player.hp,
+      xp: this.player.xp,
+      bosses: [...this.defeatedBosses],
+      achievements: [...this.achieved],
+      stats: { ...this.stats },
+      quest: this.quest ? this.quest.path : null,
+      perks: { ...this.perks },
+      pendingPerks: this.pendingPerks,
+      rooms: this.durableRooms(),
+      threads: [...this.threads],
+      hints: [...this.hints],
+      daily: this.daily && { date: this.daily.date, targets: this.daily.targets, done: [...this.daily.done], rewarded: this.daily.rewarded },
+      echo: this.echo,
+    };
+  }
+
+  // Portes ouvertes, clés, coffres et murs brisés survivent au rechargement (pas les monstres).
+  durableRooms() {
+    const out = {};
+    for (const [sk, st] of this.roomState) {
+      if (!st.opened && !st.hasKey && !st.chests.size && !st.broken.size) continue;
+      out[sk] = { o: st.opened ? 1 : 0, k: st.hasKey ? 1 : 0, c: [...st.chests], b: [...st.broken] };
+    }
+    return out;
+  }
+
+  // ── Dons ────────────────────────────────────────────────────────
+
+  perk(id) {
+    return this.perks[id] || 0;
+  }
+
+  maxHp() {
+    return maxHpFor(this.player.level) + this.perk('heart') + this.sealHearts();
+  }
+
+  sight() {
+    return SIGHT + 1.5 * this.perk('lynx') + this.relic('lantern');
+  }
+
+  // ── Bonus tirés du vault : reliques (notes légendaires) et sceaux (dossiers complétés) ──
+
+  relic(id) {
+    return this.relics[id] || 0;
+  }
+
+  sealHearts() {
+    return Math.min(4, Math.floor(this.seals / 2));
+  }
+
+  sealXpBonus() {
+    return Math.min(0.5, 0.05 * this.seals);
+  }
+
+  countSeals() {
+    let n = 0;
+    for (const d of this.world.dirs) {
+      if (!d._direct) continue;
+      let got = 0;
+      for (const c of d.children) if (c.type === 'MARKDOWN_FILE' && this.collected.has(c.path)) got++;
+      if (got >= d._direct) n++;
+    }
+    return n;
+  }
+
+  refreshBonuses() {
+    this.relics = relicCounts(this.byPath, this.collected);
+    this.seals = this.countSeals();
+    const p = this.player;
+    p.maxHp = this.maxHp();
+    p.hp = Math.min(p.hp, p.maxHp);
+  }
+
+  // Temps de préparation des attaques ennemies (relique « Sablier figé »).
+  windupScale() {
+    return 1 + 0.25 * this.relic('hourglass');
+  }
+
+  // ── Notes du jour ───────────────────────────────────────────────
+
+  ensureDaily() {
+    const date = today();
+    if (this.daily && this.daily.date === date && this.daily.targets.length) return;
+    this.daily = { date, targets: pickDaily(this.world.notes, this.collected, date), done: new Set(), rewarded: false };
+  }
+
+  isDailyTarget(note) {
+    return !!this.daily && this.daily.targets.includes(note.path) && !this.daily.done.has(note.path);
+  }
+
+  readDaily(note) {
+    if (!this.isDailyTarget(note)) return false;
+    const d = this.daily;
+    d.done.add(note.path);
+    const p = this.player;
+    this.float(p.x, p.y - 1.1, `note du jour ${d.done.size}/${d.targets.length}`, '#4affd8');
+    this.burst(p.x, p.y, '#4affd8', 14, 4);
+    this.sfx.key();
+    if (this.quest === note) {
+      this.quest = null;
+      this.refreshQuest();
+    }
+    if (d.done.size >= d.targets.length && !d.rewarded) {
+      d.rewarded = true;
+      this.stats.dailies++;
+      this.pendingPerks++;
+      this.dropOrbs(p.x, p.y, 10 + 3 * (this.room.node._depth || 0));
+      if (this.cb.onDailyDone) this.cb.onDailyDone();
+    }
+    this.dirty = true;
+    return true;
+  }
+
+  choosePerk(id) {
+    if (!PERK_BY_ID[id] || this.pendingPerks <= 0) return;
+    this.perks[id] = this.perk(id) + 1;
+    this.pendingPerks--;
+    const p = this.player;
+    p.maxHp = this.maxHp();
+    if (id === 'heart') p.hp = Math.min(p.maxHp, p.hp + 1);
+    if (id === 'lynx') this.lastTile = -1;
+    this.sfx.levelUp();
+    this.burst(p.x, p.y, '#ffd23f', 18, 4);
+    this.dirty = true;
+  }
+
+  setMode(mode) {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    if (this.room) this.goTo(this.room.node._key, { from: null });
+  }
+
+  // opts.from : nœud d'où l'on vient (par défaut la salle courante) → on réapparaît
+  //             devant la porte qui mène vers lui.
+  // opts.at   : position exacte (restauration).
+  // opts.focus: note à côté de laquelle apparaître (suivi de lien).
+  goTo(key, opts = {}) {
+    const node = this.byPath && key ? this.byPath.get(key) : null;
+    if (!node) return false;
+    const prev = 'from' in opts ? opts.from : this.room ? this.room.node : null;
+    if (this.room && this.room.orbs.length) {
+      const rest = this.room.orbs.reduce((a, o) => a + o.value, 0);
+      this.room.orbs = [];
+      this.gainXp(rest);
+    }
+    this.clearFx();
 
     const stack = [];
-    let p = node;
-    while (p) {
-      stack.unshift(p._key);
-      p = p._parent;
-    }
+    for (let p = node; p; p = p._parent) stack.unshift(p._key);
     this.stack = stack;
+    const firstVisit = !this.visited.has(node._key);
     for (const s of stack) this.visited.add(s);
 
     this.room = this.buildRoom(node);
 
-    let px = at ? at.x : null;
-    let py = at ? at.y : null;
-    if (!Number.isFinite(px) || !Number.isFinite(py) || !this.canStand(px, py)) {
-      px = this.room.spawn.x;
-      py = this.room.spawn.y;
-    }
-    this.player.x = px;
-    this.player.y = py;
+    let pos = null;
+    const at = opts.at;
+    if (at && Number.isFinite(at.x) && Number.isFinite(at.y) && this.canStand(at.x, at.y)) pos = { x: at.x, y: at.y };
+    if (!pos && opts.focus) pos = this.posNearNote(opts.focus);
+    if (!pos && prev) pos = this.arrivalFrom(prev);
+    if (!pos) pos = this.room.spawn;
+
+    const pl = this.player;
+    pl.x = pos.x;
+    pl.y = pos.y;
+    pl.kx = 0;
+    pl.ky = 0;
     this.attackCd = 0;
     this.attackT = 0;
-    this.updateVisibility();
-
-    if (this.cb.onRoom) this.cb.onRoom(node, stack);
+    this.dodgeT = 0;
+    this.phoenixUsed = false;
+    this.aegisLeft = this.relic('aegis');
+    if (firstVisit && this.relic('feather') && this.player.hp < this.player.maxHp) {
+      this.player.hp = Math.min(this.player.maxHp, this.player.hp + this.relic('feather'));
+      this.float(pos.x, pos.y - 1, `+${this.relic('feather')}♥ plume`, '#ff8a8a');
+    }
+    this.lastTile = -1;
+    this.refreshSight();
+    this.refreshQuest();
+    this.updateCamera();
+    this.prompt = this.nearest();
+    this.dirty = true;
+    if (this.cb.onRoom) this.cb.onRoom(node);
+    return true;
   }
 
   buildRoom(node) {
-    const seed = hashStr(node.path || node.name || node.id);
-    const rand = mulberry32(seed);
+    const gen = generateRoom(node, { mode: this.mode, bossAllowed: !this.defeatedBosses.has(node._key) });
     const theme = getTheme(node.name || node.path || node.id);
-    const spr = makeThemeSprites(theme);
-
-    const walls = new Set();
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (x === 0 || x === W - 1 || y === 0 || y === H - 1) walls.add(y * W + x);
-      }
+    const sk = `${this.mode}:${node._key}`;
+    let st = this.roomState.get(sk);
+    if (!st) {
+      st = { explored: null, exploredFloor: 0, killed: new Set(), opened: false, hasKey: false, chests: new Set(), broken: new Set() };
+      this.roomState.set(sk, st);
     }
-
-    const clusters = 1 + ((rand() * 2) | 0);
-    for (let i = 0; i < clusters; i++) {
-      const cx = 4 + ((rand() * (W - 9)) | 0);
-      const cy = 4 + ((rand() * (H - 9)) | 0);
-      const cells = 1 + ((rand() * 3) | 0);
-      walls.add(cy * W + cx);
-      if (cells > 1) walls.add(cy * W + cx + 1);
-      if (cells > 2) walls.add((cy + 1) * W + cx);
-      if (cells > 3) walls.add((cy + 2) * W + cx);
-    }
-
-    const subs = node.children.filter(c => c.type === 'DIRECTORY');
-    const visSubs = subs.slice(0, 6);
-    const extras = subs.slice(6);
-
-    const portals = [];
-    const count = Math.min(visSubs.length, 6);
-    const step = count ? (W - 8) / count : 1;
-    for (let i = 0; i < count; i++) {
-      const c = visSubs[i];
-      const x = Math.round(3 + i * step);
-      portals.push({ key: c._key, kind: 'dir', x, y: 0, node: c });
-    }
-    if (node._parent) {
-      portals.push({ key: node._parent._key, kind: 'back', x: Math.floor(W / 2), y: H - 1, node: node._parent });
-    }
-
-    for (const pt of portals) {
-      walls.delete(pt.y * W + pt.x);
-      if (pt.kind === 'dir') walls.delete((pt.y + 1) * W + pt.x);
-      else walls.delete((pt.y - 1) * W + pt.x);
-    }
-
-    const spawn = { x: W / 2, y: H - 2 };
-    walls.delete(spawn.y * W + spawn.x);
-
-    const md = node.children.filter(c => c.type === 'MARKDOWN_FILE');
-    const visibleMd = md.slice(0, NOTE_CAP);
-    const leftover = md.slice(NOTE_CAP);
-
-    const free = [];
-    for (let y = 2; y < H - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
-        const idx = y * W + x;
-        if (walls.has(idx)) continue;
-        if (portals.some(pt => pt.x === x && pt.y === y)) continue;
-        free.push([x, y]);
-      }
-    }
-    shuffle(free, rand);
-
-    const hasBoss =
-      visibleMd.length > 0 && !this.defeatedBosses.has(node._key) && hashStr(`${node.path || node.name}:guard`) % 5 === 0;
-
-    let boss = null;
-    let bossCell = null;
-    if (hasBoss) {
-      let worst = null;
-      let wd = -1;
-      for (const [x, y] of free) {
-        const d = Math.hypot(x - spawn.x, y - spawn.y);
-        if (d > wd) {
-          wd = d;
-          worst = [x, y];
-        }
-      }
-      if (worst) {
-        bossCell = worst;
-        boss = { x: worst[0] + 0.5, y: worst[1] + 0.5, hp: BOSS.hp, maxHp: BOSS.hp, name: BOSS.name, dmg: BOSS.dmg, speed: BOSS.speed, seed: rand() * 10, dead: false };
-      }
-    }
-
-    const notes = [];
-    let used = 0;
-    const awayCells = [];
-    for (const [x, y] of free) {
-      if (used >= visibleMd.length) break;
-      if (bossCell && Math.hypot(x - bossCell[0], y - bossCell[1]) < 2.2) continue;
-      if (Math.hypot(x - spawn.x, y - spawn.y) < 3) continue;
-      if (Math.abs(x - spawn.x) < 2 && y > spawn.y - 1) continue;
-      if (y < 2) continue;
-      awayCells.push([x, y]);
-      notes.push({ x, y, node: visibleMd[used], seed: hashStr(visibleMd[used].path) });
-      used++;
-    }
-
-    const usedCells = new Set(awayCells.map(([x, y]) => y * W + x));
-    if (bossCell) usedCells.add(bossCell[1] * W + bossCell[0]);
-
-    let library = null;
-    for (const [x, y] of free) {
-      if (usedCells.has(y * W + x)) continue;
-      if (Math.hypot(x - spawn.x, y - spawn.y) < 2.5) continue;
-      if (portals.some(pt => pt.x === x && pt.y === y)) continue;
-      library = { x, y, count: leftover.length, notes: leftover };
-      usedCells.add(y * W + x);
-      break;
-    }
-
-    let sign = null;
-    if (extras.length) {
-      for (const [x, y] of free) {
-        if (usedCells.has(y * W + x)) continue;
-        if (portals.some(pt => pt.x === x && pt.y === y)) continue;
-        sign = { x, y, extras };
-        usedCells.add(y * W + x);
-        break;
-      }
-    }
-
-    const particles = [];
-    for (let i = 0; i < 18; i++) {
-      particles.push({
-        x: 2 + rand() * (W - 4),
-        y: 2 + rand() * (H - 4),
-        vx: (rand() - 0.5) * 0.6,
-        vy: (rand() - 0.5) * 0.6,
-        seed: (rand() * 6.2831) | 0,
-        speed: 0.6 + rand() * 1.2,
-      });
-    }
-
-    const monsters = [];
-    const mCount = 4 + ((rand() * 3) | 0);
-    const mCells = [];
-    for (const [x, y] of free) {
-      if (Math.hypot(x - spawn.x, y - spawn.y) < 4) continue;
-      if (usedCells.has(y * W + x)) continue;
-      if (bossCell && Math.hypot(x - bossCell[0], y - bossCell[1]) < 3) continue;
-      mCells.push([x, y]);
-    }
-    shuffle(mCells, rand);
-    for (let i = 0; i < mCount && i < mCells.length; i++) {
-      const [cx, cy] = mCells[i];
-      const type = rand() < 0.6 ? MONSTER_TYPES.slime : MONSTER_TYPES.wisp;
-      monsters.push({
-        type,
-        x: cx + 0.5,
-        y: cy + 0.5,
-        hp: type.hp,
-        seed: rand() * 10,
-        angle: rand() * Math.PI * 2,
-        turnT: 1 + rand() * 2,
-        dying: false,
-      });
-    }
-
-    const expl = this.roomExplored.get(node._key) || new Uint8Array(W * H);
-    this.roomExplored.set(node._key, expl);
-
+    if (!st.explored) st.explored = new Uint8Array(gen.W * gen.H);
+    const I = (x, y) => y * gen.W + x;
+    // Les portes scellées sont des murs tant qu'elles ne sont pas ouvertes ; les fissures brisées deviennent du sol.
+    const walls = gen.walls.slice();
+    if (!st.opened) for (const d of gen.doors) walls[I(d.x, d.y)] = 1;
+    for (const c of gen.cracks) if (st.broken.has(I(c.x, c.y))) walls[I(c.x, c.y)] = 0;
+    const monsters = gen.monsters
+      .map((m, id) => ({ ...m, id, hunting: false, kick: null }))
+      .filter(m => !st.killed.has(m.id));
     return {
+      ...gen,
+      walls,
+      doors: st.opened ? [] : gen.doors,
+      key: st.hasKey || st.opened ? null : gen.key,
+      chests: gen.chests.filter(c => !st.chests.has(I(c.x, c.y))),
+      cracks: gen.cracks.filter(c => !st.broken.has(I(c.x, c.y))),
       node,
       theme,
-      spr,
-      walls,
-      portals,
-      notes,
-      library,
-      sign,
-      spawn,
-      particles,
+      spr: makeThemeSprites(theme),
+      state: st,
+      explored: st.explored,
+      visible: new Uint8Array(gen.W * gen.H),
       monsters,
-      boss,
-      leftoverCount: leftover.length,
-      explored: expl,
-      visible: new Uint8Array(W * H),
+      boss: gen.boss ? { ...gen.boss, depth: node._depth, dead: false, hunting: false, kick: null } : null,
+      pickups: [],
+      projectiles: [],
+      telegraphs: [],
+      orbs: [],
+      playerField: null,
+      questWp: null,
+      questField: null,
     };
+  }
+
+  arrivalFrom(prev) {
+    const room = this.room;
+    if (prev === room.node || !isAncestor(room.node, prev)) return null;
+    const child = childToward(room.node, prev);
+    const pt = room.portals.find(p => p.kind === 'dir' && p.node === child);
+    if (pt) return center(pt.front);
+    if (room.sign && room.sign.extras.includes(child)) return this.standNear(room.sign.x, room.sign.y);
+    return null;
+  }
+
+  posNearNote(note) {
+    const room = this.room;
+    const e = room.notes.find(n => n.node === note);
+    if (e) return this.standNear(e.x, e.y);
+    if (room.library && room.library.notes.includes(note)) return this.standNear(room.library.x, room.library.y);
+    return null;
+  }
+
+  standNear(tx, ty) {
+    for (const [dx, dy] of NEAR) {
+      const x = tx + dx + 0.5;
+      const y = ty + dy + 0.5;
+      if (this.canStand(x, y)) return { x, y };
+    }
+    return null;
+  }
+
+  isWall(tx, ty) {
+    const r = this.room;
+    if (tx < 0 || ty < 0 || tx >= r.W || ty >= r.H) return true;
+    return r.walls[ty * r.W + tx] === 1;
   }
 
   canStand(x, y) {
     if (!this.room) return false;
     const r = 0.22;
-    const pts = [
-      [x - r, y - r],
-      [x + r, y - r],
-      [x - r, y + r],
-      [x + r, y + r],
-      [x, y],
-    ];
-    for (const [px, py] of pts) {
-      const tx = Math.floor(px);
-      const ty = Math.floor(py);
-      if (tx < 0 || ty < 0 || tx >= W || ty >= H) return false;
-      if (this.room.walls.has(ty * W + tx)) return false;
-    }
-    return true;
+    return !(
+      this.isWall(Math.floor(x - r), Math.floor(y - r)) ||
+      this.isWall(Math.floor(x + r), Math.floor(y - r)) ||
+      this.isWall(Math.floor(x - r), Math.floor(y + r)) ||
+      this.isWall(Math.floor(x + r), Math.floor(y + r))
+    );
   }
 
-  updateVisibility() {
+  tileOf(e) {
+    return { x: Math.floor(e.x), y: Math.floor(e.y) };
+  }
+
+  isVisible(x, y) {
+    const r = this.room;
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 0 || ty < 0 || tx >= r.W || ty >= r.H) return false;
+    return r.visible[ty * r.W + tx] === 1;
+  }
+
+  // Recalculée seulement quand le joueur change de case.
+  refreshSight() {
     const room = this.room;
-    if (!room) return;
-    const cs = Math.floor(this.player.x);
-    const ccy = Math.floor(this.player.y);
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const d2 = (x + 0.5 - this.player.x) ** 2 + (y + 0.5 - this.player.y) ** 2;
-        if (d2 <= SIGHT * SIGHT) {
-          const idx = y * W + x;
-          room.visible[idx] = 1;
-          room.explored[idx] = 1;
+    const { W, H, walls, visible, explored } = room;
+    const p = this.player;
+    const tx = Math.floor(p.x);
+    const ty = Math.floor(p.y);
+    const tile = ty * W + tx;
+    if (tile === this.lastTile) return;
+    this.lastTile = tile;
+
+    visible.fill(0);
+    const sight = this.sight();
+    const R = Math.ceil(sight);
+    const before = room.state.exploredFloor;
+    for (let y = Math.max(0, ty - R); y <= Math.min(H - 1, ty + R); y++) {
+      for (let x = Math.max(0, tx - R); x <= Math.min(W - 1, tx + R); x++) {
+        if ((x + 0.5 - p.x) ** 2 + (y + 0.5 - p.y) ** 2 > sight * sight) continue;
+        if (!lineOfSight(walls, W, p.x, p.y, x, y)) continue;
+        const i = y * W + x;
+        visible[i] = 1;
+        if (!explored[i]) {
+          explored[i] = 1;
+          if (!walls[i]) room.state.exploredFloor++;
         }
       }
     }
-    this.visSet = new Set();
-    for (let i = 0; i < W * H; i++) if (room.visible[i]) this.visSet.add(i);
-    void cs;
-    void ccy;
+    if (before < room.floorCount && room.state.exploredFloor >= room.floorCount) this.dirty = true;
+    room.playerField = bfsField(walls, W, H, tx, ty);
+  }
+
+  isRoomFullyRevealed() {
+    return !!this.room && this.room.state.exploredFloor >= this.room.floorCount;
+  }
+
+  setQuest(note) {
+    this.quest = note && (!this.collected.has(note.path) || this.isDailyTarget(note)) ? note : null;
+    this.refreshQuest();
+    this.dirty = true;
+  }
+
+  refreshQuest() {
+    const room = this.room;
+    if (!room) return;
+    room.questWp = this.quest ? questWaypoint(room, this.quest) : null;
+    room.questField = room.questWp ? bfsField(room.walls, room.W, room.H, room.questWp.x, room.questWp.y) : null;
+    const p = this.tileOf(this.player);
+    if (room.questField && room.questField[p.y * room.W + p.x] < 0 && room.doors.length) {
+      const d = room.doors[0];
+      room.questWp = room.key ? { x: room.key.x, y: room.key.y, kind: 'key' } : { x: d.x, y: d.y, kind: 'door' };
+      const open = room.walls.slice();
+      for (const dd of room.doors) open[dd.y * room.W + dd.x] = 0;
+      room.questField = bfsField(open, room.W, room.H, room.questWp.x, room.questWp.y);
+    }
+  }
+
+  updateQuestDir() {
+    const room = this.room;
+    this.questDir = null;
+    if (!room || !room.questWp || !room.questField) return;
+    const p = this.player;
+    const { x: tx, y: ty } = this.tileOf(p);
+    const here = room.questField[ty * room.W + tx];
+    let goal = center(room.questWp);
+    if (here > 2) {
+      const s = stepDown(room.questField, room.W, room.H, tx, ty);
+      if (s) goal = center(s);
+    } else if (here >= 0 && here <= 1) {
+      return;
+    }
+    const dx = goal.x - p.x;
+    const dy = goal.y - p.y;
+    const d = Math.hypot(dx, dy) || 1;
+    this.questDir = { x: dx / d, y: dy / d };
+  }
+
+  noteGuarded(note) {
+    const b = this.room.boss;
+    return note.guarded && b && !b.dead;
   }
 
   nearest() {
     if (!this.room) return null;
     const { x, y } = this.player;
-    const guarded = this.room.boss && !this.room.boss.dead;
     let best = null;
     let bd = 1.5;
     const consider = (it) => {
-      const px = it.x + 0.5;
-      const py = it.y + 0.5;
-      const idx = Math.floor(py) * W + Math.floor(px);
-      if (!this.visSet.has(idx)) return;
-      const d = Math.hypot(px - x, py - y);
+      if (!this.isVisible(it.x + 0.5, it.y + 0.5)) return;
+      const d = Math.hypot(it.x + 0.5 - x, it.y + 0.5 - y);
       if (d < bd) {
         bd = d;
         best = it;
       }
     };
     for (const note of this.room.notes) {
-      if (this.collected.has(note.node.path)) continue;
-      consider({ ...note, kind: 'note', label: guarded ? 'ombre protectrice…' : 'E — lire' });
+      if (this.collected.has(note.node.path)) {
+        if (this.isDailyTarget(note.node)) consider({ x: note.x, y: note.y, kind: 'daily', note, label: 'E — relire (note du jour)' });
+        continue;
+      }
+      consider({ x: note.x, y: note.y, kind: 'note', note, label: this.noteGuarded(note) ? 'ombre protectrice…' : 'E — lire' });
     }
     for (const pt of this.room.portals) {
-      consider({ x: pt.x, y: pt.y, kind: 'portal', portal: pt, label: pt.kind === 'back' ? 'E — remonter' : 'E — entrer' });
+      consider({ x: pt.x, y: pt.y, kind: 'portal', portal: pt, label: pt.kind === 'back' ? `E — remonter : ${pt.node.name}` : `E — entrer : ${pt.node.name}` });
     }
-    if (this.room.library && this.room.library.count > 0) {
-      consider({ ...this.room.library, kind: 'library', label: 'E — bibliothèque' });
-    }
-    if (this.room.sign) {
-      consider({ ...this.room.sign, kind: 'sign', label: 'E — routes' });
-    }
+    if (this.room.library) consider({ x: this.room.library.x, y: this.room.library.y, kind: 'library', label: 'E — bibliothèque' });
+    if (this.room.sign) consider({ x: this.room.sign.x, y: this.room.sign.y, kind: 'sign', label: 'E — routes' });
+    for (const c of this.room.chests) consider({ x: c.x, y: c.y, kind: 'chest', chest: c, label: c.secret ? 'E — coffre caché !' : 'E — ouvrir le coffre' });
+    const hasKey = this.room.state.hasKey;
+    for (const d of this.room.doors) consider({ x: d.x, y: d.y, kind: 'door', label: hasKey ? 'E — déverrouiller' : 'scellée — trouve la clé' });
     return best;
   }
 
   interact() {
-    if (!this.room || this.dead) return;
+    if (!this.room || this.dead || this.paused) return;
     const it = this.nearest();
     if (!it) {
       this.sfx.error();
       return;
     }
     if (it.kind === 'note') {
-      if (this.room.boss && !this.room.boss.dead) {
+      if (this.noteGuarded(it.note)) {
         this.sfx.error();
         if (this.cb.onBlocked) this.cb.onBlocked('Une aura sombre protège ce parchemin. Vaincs le gardien.');
         return;
       }
-      this.collected.add(it.node.path);
-      this.sfx.pickup();
-      this.heal(1);
-      if (this.cb.onCollect) this.cb.onCollect(it.node);
+      this.collectNote(it.note.node);
+    } else if (it.kind === 'daily') {
+      this.readDaily(it.note.node);
     } else if (it.kind === 'portal') {
-      if (it.portal.kind === 'back') {
-        this.sfx.back();
-        this.goTo(it.portal.key);
-      } else {
-        this.sfx.door();
-        this.goTo(it.portal.key);
-      }
+      if (it.portal.kind === 'back') this.sfx.back();
+      else this.sfx.door();
+      this.goTo(it.portal.key);
     } else if (it.kind === 'library') {
       this.sfx.open();
-      if (this.cb.onLibrary) this.cb.onLibrary(this.room.node);
+      if (this.cb.onLibrary) this.cb.onLibrary(this.room.library.notes);
     } else if (it.kind === 'sign') {
       this.sfx.open();
-      if (this.cb.onRoutes) this.cb.onRoutes(this.room.node, this.room.sign.extras);
+      if (this.cb.onRoutes) this.cb.onRoutes(this.room.sign.extras);
+    } else if (it.kind === 'chest') {
+      this.openChest(it.chest);
+    } else if (it.kind === 'door') {
+      if (this.room.state.hasKey) this.unlockDoors();
+      else {
+        this.sfx.error();
+        if (this.cb.onBlocked) this.cb.onBlocked('Porte scellée. La clé est quelque part dans cet étage.');
+      }
+    }
+  }
+
+  // ── Clé, portes, coffres, murs fissurés ─────────────────────────
+
+  pickKey() {
+    const room = this.room;
+    room.state.hasKey = true;
+    this.burst(room.key.x + 0.5, room.key.y + 0.5, '#ffd23f', 16, 4);
+    this.float(room.key.x + 0.5, room.key.y, 'clé de la voûte', '#ffd23f');
+    room.key = null;
+    this.sfx.key();
+    this.dirty = true;
+    this.refreshQuest();
+    if (this.cb.onKey) this.cb.onKey();
+  }
+
+  unlockDoors() {
+    const room = this.room;
+    room.state.opened = true;
+    for (const d of room.doors) {
+      room.walls[d.y * room.W + d.x] = 0;
+      this.burst(d.x + 0.5, d.y + 0.5, '#c8a040', 10, 3);
+    }
+    room.doors = [];
+    this.stats.unlocks++;
+    this.sfx.unlock();
+    this.shake(2.5, 0.3);
+    this.float(this.player.x, this.player.y - 1, 'la voûte s’ouvre', '#ffd23f');
+    this.lastTile = -1;
+    this.refreshSight();
+    this.refreshQuest();
+    this.dirty = true;
+  }
+
+  openChest(chest) {
+    const room = this.room;
+    room.state.chests.add(chest.y * room.W + chest.x);
+    room.chests = room.chests.filter(c => c !== chest);
+    this.stats.chests++;
+    this.dirty = true;
+    this.sfx.chest();
+    const cx = chest.x + 0.5;
+    const cy = chest.y + 0.5;
+    this.burst(cx, cy, '#ffd23f', chest.secret ? 28 : 16, 4.5);
+    this.shake(1.5, 0.15);
+    const depth = room.node._depth || 0;
+    let loot;
+    if (chest.secret) {
+      this.pendingPerks++;
+      this.dropOrbs(cx, cy, 6 + depth * 2);
+      loot = 'rune de don : un don de plus !';
+    } else {
+      const r = Math.random();
+      if (r < 0.5) {
+        this.dropOrbs(cx, cy, 5 + depth * 2);
+        loot = 'une gerbe d’orbes';
+      } else if (r < 0.8) {
+        room.pickups.push({ x: cx - 0.3, y: cy, kind: 'heart', t: 0 }, { x: cx + 0.3, y: cy, kind: 'heart', t: 0 });
+        loot = 'deux cœurs';
+      } else {
+        const p = this.player;
+        this.float(p.x, p.y - 0.9, 'potion !', '#ff8a8a');
+        p.hp = p.maxHp;
+        this.sfx.heal();
+        loot = 'une potion — vie restaurée';
+      }
+    }
+    if (this.cb.onChest) this.cb.onChest(loot, chest.secret);
+  }
+
+  breakCrack(c) {
+    const room = this.room;
+    const i = c.y * room.W + c.x;
+    room.walls[i] = 0;
+    room.state.broken.add(i);
+    room.cracks = room.cracks.filter(k => k !== c);
+    this.stats.secrets++;
+    this.dirty = true;
+    this.sfx.thud();
+    this.shake(2.5, 0.25);
+    this.burst(c.x + 0.5, c.y + 0.5, '#8a8a92', 16, 4);
+    this.float(c.x + 0.5, c.y, 'passage secret !', '#9fe0ff');
+    this.lastTile = -1;
+    this.refreshSight();
+    this.refreshQuest();
+  }
+
+  collectNote(note) {
+    if (this.collected.has(note.path)) {
+      if (this.cb.onCollect) this.cb.onCollect(note, false);
+      return;
+    }
+    this.collected.add(note.path);
+    this.sfx.pickup();
+    const color = { commune: '#ffe08a', rare: '#9fe0ff', legendaire: '#dca8ff' }[note._rarity] || '#ffe08a';
+    this.burst(this.player.x, this.player.y - 0.3, color, note._rarity === 'legendaire' ? 26 : 14, 5);
+    this.heal(1);
+    this.gainXp((RARITY[note._rarity] || RARITY.commune).xp * (1 + 0.25 * this.relic('scholar')));
+    this.dirty = true;
+    const seals = this.seals;
+    this.refreshBonuses();
+    if (note._relic && this.cb.onRelic) this.cb.onRelic(RELIC_BY_ID[note._relic], this.relic(note._relic));
+    if (this.seals > seals && this.cb.onSeal) this.cb.onSeal(note._parent, this.seals);
+    this.readDaily(note);
+    if (this.quest === note) {
+      this.quest = null;
+      if (this.cb.onQuestDone) this.cb.onQuestDone(note);
+    }
+    this.refreshQuest();
+    if (this.cb.onCollect) this.cb.onCollect(note, true);
+  }
+
+  followLink(note) {
+    if (!note || !note._parent) return;
+    this.stats.links++;
+    this.dirty = true;
+    this.sfx.warp();
+    this.goTo(note._parent._key, { focus: note });
+    // Premier passage par ce fil : petite récompense pour tisser le vault.
+    if (!this.threads.has(note.path)) {
+      this.threads.add(note.path);
+      this.gainXp(LINK_XP);
+      this.float(this.player.x, this.player.y - 1, `fil tissé +${LINK_XP} XP`, '#9fe0ff');
     }
   }
 
   attack() {
-    if (!this.room || this.dead || this.attackCd > 0) return;
+    if (!this.room || this.dead || this.paused || this.attackCd > 0 || this.dodgeT > 0) return;
     this.attackCd = ATTACK_CD;
     this.attackT = 0.22;
     this.sfx.sword();
 
     const { x, y } = this.player;
     const dir = FACING[this.player.facing];
-    const hit = (m) => {
+    const power = 1 + Math.floor((this.player.level - 1) / 3) + this.perk('blade');
+    const range = ATTACK_MAX * (1 + 0.25 * this.perk('reach'));
+    const hit = (m, reach = range) => {
       const f = (m.x - x) * dir.x + (m.y - y) * dir.y;
       const p = (m.x - x) * -dir.y + (m.y - y) * dir.x;
-      return f >= 0.25 && f <= ATTACK_MAX && Math.abs(p) <= ATTACK_HALF;
+      return f >= -0.2 && f <= reach && Math.abs(p) <= ATTACK_HALF;
     };
-    const damage = (m) => {
-      if (m.dying) return;
-      m.hp -= 1;
-      this.sfx.hit();
-      m.kick = { x: dir.x * 1.5, y: dir.y * 1.5 };
-      if (m.hp <= 0) {
-        m.dying = true;
-        if (m.type) {
-          this.stats.kills++;
-          this.sfx.kill();
-          this.gainXp(m.type.xp);
+    for (const c of this.room.cracks.slice()) {
+      if (hit({ x: c.x + 0.5, y: c.y + 0.5 }, 1.6)) this.breakCrack(c);
+    }
+    for (const m of this.room.monsters) {
+      if (!m.dying && hit(m)) this.swordHit(m, power, x, y);
+    }
+    const b = this.room.boss;
+    if (b && !b.dead && hit(b)) this.swordHit(b, power, x, y);
+
+    // Un projectile ennemi pris dans l'arc repart vers l'ennemi le plus proche
+    // situé devant soi (cône de ~70°), sinon tout droit.
+    const facing = Math.atan2(dir.y, dir.x);
+    const targets = [...this.room.monsters.filter(m => !m.dying), ...(b && !b.dead ? [b] : [])];
+    for (const s of this.room.projectiles) {
+      if (s.owner !== 'enemy' || !hit(s, range + 0.4)) continue;
+      let aim = facing;
+      let best = Infinity;
+      for (const t of targets) {
+        const a = Math.atan2(t.y - s.y, t.x - s.x);
+        const dist = Math.hypot(t.x - s.x, t.y - s.y);
+        if (Math.abs(angleDiff(a, facing)) < 1.2 && dist < best) {
+          best = dist;
+          aim = a;
         }
       }
-    };
-    for (const m of this.room.monsters) {
-      if (hit(m)) damage(m);
+      s.owner = 'player';
+      s.vx = Math.cos(aim) * 8;
+      s.vy = Math.sin(aim) * 8;
+      s.dmg = (2 + power) * (this.perk('mirror') ? 2 : 1);
+      s.t = 0;
+      this.stats.reflects++;
+      this.dirty = true;
+      this.sfx.reflect();
+      this.float(s.x, s.y - 0.5, 'renvoi !', '#4affd8');
+      this.freeze(0.04);
     }
-    if (this.room.boss && !this.room.boss.dead && hit(this.room.boss)) damage(this.room.boss);
   }
 
-  gainXp(n) {
+  // Inflige des dégâts depuis (fromX, fromY) : bouclier frontal, dégâts doublés sur
+  // une cible étourdie, interruption des préparations d'attaque.
+  swordHit(e, power, x, y) {
+    const crit = Math.random() < 0.15 * this.relic('quill');
+    if (this.hurt(e, power, x, y, { crit }) && this.relic('ember') && !e.dying && !e.dead) {
+      e.burn = { t: 1, dmg: this.relic('ember') };
+    }
+  }
+
+  // opts.crit : coup critique ; opts.pierce : ignore le bouclier (brûlure, épines).
+  hurt(e, dmg, fromX, fromY, { crit: forced = false, pierce = false } = {}) {
+    const ang = Math.atan2(fromY - e.y, fromX - e.x);
+    if (!pierce && e.kind === 'knight' && e.face !== undefined && Math.abs(angleDiff(ang, e.face)) < SHIELD_ARC) {
+      this.sfx.clang();
+      this.float(e.x, e.y - 0.6, 'bloqué', '#c8c8d0');
+      this.burst(e.x + Math.cos(e.face) * 0.5, e.y + Math.sin(e.face) * 0.5, '#ffd23f', 6, 3);
+      this.freeze(0.03);
+      const p = this.player;
+      if (Math.hypot(p.x - fromX, p.y - fromY) < 0.01) {
+        p.kx = Math.cos(ang) * 2;
+        p.ky = Math.sin(ang) * 2;
+      }
+      return false;
+    }
+    const crit = forced || e.state === 'stun';
+    const total = crit ? dmg * 2 : dmg;
+    e.hp -= total;
+    e.hunting = true;
+    e.flash = 0.12;
+    if (e.state === 'windup') e.state = null;
+    if (e.state !== 'charge') e.kick = { x: -Math.cos(ang) * 1.5, y: -Math.sin(ang) * 1.5 };
+    this.sfx.hit();
+    this.float(e.x, e.y - 0.6, crit ? `${total}!` : `${total}`, crit ? '#ffd23f' : '#ffffff');
+    this.burst(e.x + Math.cos(ang) * 0.3, e.y + Math.sin(ang) * 0.3, '#ffffff', crit ? 8 : 4, 3);
+    this.freeze(crit ? 0.08 : 0.05);
+    this.shake(crit ? 2.5 : 1.5, 0.12);
+    if (e.hp <= 0) {
+      if (e === this.room.boss) this.killBoss(e);
+      else this.killMonster(e);
+    }
+    return true;
+  }
+
+  // Don « Onde de choc » : repousse et blesse ce qui entoure la fin de la roulade.
+  shockwave() {
     const p = this.player;
-    p.xp += n;
-    const lvl = 1 + Math.floor(p.xp / LEVEL_XP);
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      this.fx.sparks.push({ x: p.x, y: p.y, vx: Math.cos(a) * 6, vy: Math.sin(a) * 6, color: '#9fe0ff', t: 0, life: 0.25 });
+    }
+    for (const m of this.room.monsters) {
+      if (!m.dying && Math.hypot(m.x - p.x, m.y - p.y) < 1.7) this.hurt(m, 1, p.x, p.y);
+    }
+    const b = this.room.boss;
+    if (b && !b.dead && Math.hypot(b.x - p.x, b.y - p.y) < 1.9) this.hurt(b, 1, p.x, p.y);
+  }
+
+  dodge(keys) {
+    if (!this.room || this.dead || this.paused || this.dodgeCd > 0 || this.dodgeT > 0) return;
+    const p = this.player;
+    let dx = 0;
+    let dy = 0;
+    if (keys.has('ArrowLeft') || keys.has('KeyA')) dx -= 1;
+    if (keys.has('ArrowRight') || keys.has('KeyD')) dx += 1;
+    if (keys.has('ArrowUp') || keys.has('KeyW')) dy -= 1;
+    if (keys.has('ArrowDown') || keys.has('KeyS')) dy += 1;
+    if (!dx && !dy) {
+      dx = FACING[p.facing].x;
+      dy = FACING[p.facing].y;
+    }
+    const len = Math.hypot(dx, dy);
+    this.dodgeDir = { x: dx / len, y: dy / len };
+    this.dodgeT = DODGE_TIME;
+    this.dodgeCd = DODGE_CD * Math.pow(0.7, this.perk('roll'));
+    this.dodgeAvoided = false;
+    this.sfx.dodge();
+    this.burst(p.x, p.y + 0.3, '#a8a8b8', 5, 2);
+  }
+
+  killMonster(m) {
+    m.dying = true;
+    if (m.id != null) this.room.state.killed.add(m.id);
+    this.stats.kills++;
+    this.dirty = true;
+    this.sfx.kill();
+    const color = m.elite ? '#ff3a5a' : { slime: '#79b94f', splitter: '#4ac8ff', charger: '#a07a4a', knight: '#8a8a96', archer: '#6a6488' }[m.kind] || '#8a7ad8';
+    this.burst(m.x, m.y, color, 12, 4.5);
+    this.shake(2, 0.15);
+    if (Math.random() < DROP_CHANCE) this.room.pickups.push({ x: m.x, y: m.y, kind: 'heart', t: 0 });
+    if (Math.random() < 0.15 * this.perk('leech')) this.heal(1);
+    this.dropOrbs(m.x, m.y, Math.round(m.xp * (1 + 0.2 * this.perk('magnet'))));
+    splitOnDeath(this, m);
+  }
+
+  dropOrbs(x, y, xp) {
+    const n = Math.min(xp, 8);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random();
+      const v = 2 + Math.random() * 2;
+      const value = Math.floor(xp / n) + (i < xp % n ? 1 : 0);
+      this.room.orbs.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, value, t: 0, seed: Math.random() * 6 });
+    }
+  }
+
+  killBoss(b) {
+    b.dead = true;
+    this.sfx.bossKill();
+    this.heal(3);
+    this.burst(b.x, b.y, '#c77bff', 40, 6);
+    this.burst(b.x, b.y, '#ff6a4a', 20, 4);
+    this.freeze(0.15);
+    this.shake(4, 0.6);
+    this.dropOrbs(b.x, b.y, b.xp);
+    this.defeatedBosses.add(this.room.node._key);
+    this.dirty = true;
+    if (this.cb.onBossDefeat) this.cb.onBossDefeat(this.room.node, b);
+  }
+
+  gainXp(n, { raw = false } = {}) {
+    const p = this.player;
+    const total = (raw ? n : n * (1 + this.sealXpBonus())) + this.xpFrac;
+    const whole = Math.floor(total);
+    this.xpFrac = total - whole;
+    p.xp += whole;
+    const lvl = levelFromXp(p.xp);
     if (lvl > p.level) {
+      const before = p.maxHp;
+      this.pendingPerks += lvl - p.level;
       p.level = lvl;
+      p.maxHp = this.maxHp();
+      p.hp = Math.min(p.maxHp, p.hp + (p.maxHp - before) + 1);
       this.sfx.levelUp();
-      this.heal(1);
-      if (this.cb.onLevelUp) this.cb.onLevelUp(lvl);
+      this.dirty = true;
+      if (this.cb.onLevelUp) this.cb.onLevelUp(lvl, p.maxHp - before);
     }
   }
 
@@ -490,52 +958,31 @@ export class Game {
     const p = this.player;
     if (p.hp < p.maxHp) {
       this.sfx.heal();
+      this.float(p.x, p.y - 0.9, `+${Math.min(n, p.maxHp - p.hp)}♥`, '#ff8a8a');
     }
     p.hp = Math.min(p.maxHp, p.hp + n);
   }
 
-  canWarp(key) {
-    return this.stack.includes(key);
-  }
-
-  isRoomFullyRevealed() {
-    if (!this.room) return false;
-    for (let i = 0; i < W * H; i++) {
-      if (!this.room.explored[i]) return false;
-    }
-    return true;
-  }
-
-  snapPlayerOut() {
-    const p = this.player;
-    if (this.canStand(p.x, p.y)) return;
-    for (let r = 1; r <= 4; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const nx = p.x + dx;
-          const ny = p.y + dy;
-          if (this.canStand(nx, ny)) {
-            p.x = nx;
-            p.y = ny;
-            return;
-          }
-        }
-      }
-    }
-    p.x = this.room.spawn.x;
-    p.y = this.room.spawn.y;
-  }
-
   tick(keys, dt) {
     this.time += dt;
-    if (!this.room || this.dead) return;
+    if (!this.room || this.paused) return;
+    this.updateFx(dt);
+    if (this.dead) return;
+    if (this.fx.hitstop > 0) {
+      this.fx.hitstop -= dt;
+      return;
+    }
 
     const p = this.player;
-    this.snapPlayerOut();
+    if (!this.canStand(p.x, p.y)) {
+      const s = this.standNear(Math.floor(p.x), Math.floor(p.y)) || this.room.spawn;
+      p.x = s.x;
+      p.y = s.y;
+    }
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.attackT = Math.max(0, this.attackT - dt);
+    this.dodgeCd = Math.max(0, this.dodgeCd - dt);
     p.invuln = Math.max(0, p.invuln - dt);
-    this.flash = Math.max(0, this.flash - dt);
 
     if (p.kx || p.ky) {
       const d = Math.hypot(p.kx, p.ky);
@@ -544,6 +991,10 @@ export class Game {
       if (this.canStand(p.x, p.y + (p.ky / d) * step)) p.y += (p.ky / d) * step;
       p.kx *= 0.85;
       p.ky *= 0.85;
+      if (Math.hypot(p.kx, p.ky) < 0.05) {
+        p.kx = 0;
+        p.ky = 0;
+      }
     }
 
     let dx = 0;
@@ -553,25 +1004,25 @@ export class Game {
     if (keys.has('ArrowUp') || keys.has('KeyW')) dy -= 1;
     if (keys.has('ArrowDown') || keys.has('KeyS')) dy += 1;
 
-    const moving = dx !== 0 || dy !== 0;
-    if (moving) {
+    if (this.dodgeT > 0) {
+      // Roulade : rapide, intouchable, et laisse des images rémanentes.
+      this.dodgeT = Math.max(0, this.dodgeT - dt);
+      if (this.dodgeT === 0 && this.perk('shock')) this.shockwave();
+      const step = DODGE_SPEED * dt;
+      if (this.canStand(p.x + this.dodgeDir.x * step, p.y)) p.x += this.dodgeDir.x * step;
+      if (this.canStand(p.x, p.y + this.dodgeDir.y * step)) p.y += this.dodgeDir.y * step;
+      this.fx.ghosts.push({ x: p.x, y: p.y, facing: p.facing, t: 0 });
+      this.walking = true;
+      this.walkT += dt;
+    } else if (dx !== 0 || dy !== 0) {
       if (dx !== 0) p.facing = dx > 0 ? 3 : 2;
-      else if (dy !== 0) p.facing = dy > 0 ? 0 : 1;
+      else p.facing = dy > 0 ? 0 : 1;
       const len = Math.hypot(dx, dy);
-      dx /= len;
-      dy /= len;
-
-      const px = p.x;
-      const py = p.y;
-      const mx = px + dx * SPEED * dt;
-      const my = py + dy * SPEED * dt;
-
-      if (this.canStand(mx, py)) p.x = mx;
-      if (this.canStand(px, my)) p.y = my;
-      else if (dx && dy && this.canStand(mx, my)) {
-        if (Math.abs(mx - px) > Math.abs(my - py)) p.x = mx;
-        else p.y = my;
-      }
+      const speed = SPEED * (1 + 0.12 * this.perk('swift'));
+      const mx = p.x + (dx / len) * speed * dt;
+      const my = p.y + (dy / len) * speed * dt;
+      if (this.canStand(mx, p.y)) p.x = mx;
+      if (this.canStand(p.x, my)) p.y = my;
 
       this.walkT += dt;
       this.walking = true;
@@ -584,420 +1035,233 @@ export class Game {
       this.walking = false;
     }
 
+    this.refreshSight();
     this.updateAmbience(dt);
+    this.updatePickups(dt);
+    this.updateOrbs(dt);
     this.updateCreatures(dt);
-
-    if (p.kx || p.ky) {
-      let cand = null;
-      let cd = Infinity;
-      for (const m of this.room.monsters) {
-        if (m.dying) continue;
-        const d = Math.hypot(m.x - p.x, m.y - p.y);
-        if (d < cd) {
-          cd = d;
-          cand = m;
-        }
-      }
-      if (this.room.boss && !this.room.boss.dead) {
-        const d = Math.hypot(this.room.boss.x - p.x, this.room.boss.y - p.y);
-        if (d < cd) {
-          cd = d;
-          cand = this.room.boss;
-        }
-      }
-if (cand && cd < 0.8) {
-      const ang = Math.atan2(p.y - cand.y, p.x - cand.x);
-      let placed = false;
-      for (let i = 0; i < 8; i++) {
-        const a = ang + i * (Math.PI / 4);
-        const tx = cand.x + Math.cos(a) * 0.7;
-        const ty = cand.y + Math.sin(a) * 0.7;
-        if (this.canStand(tx, ty)) {
-          p.x = tx;
-          p.y = ty;
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        p.kx = 0;
-        p.ky = 0;
-      }
-    }
-    }
-
-    this.updateVisibility();
+    if (this.dead) return;
+    this.updateEcho();
     this.prompt = this.nearest();
+    this.updateQuestDir();
+    this.updateCamera();
+  }
+
+  updateCamera() {
+    const room = this.room;
+    const vw = VIEW_W * TILE;
+    const vh = VIEW_H * TILE;
+    const mw = room.W * TILE;
+    const mh = room.H * TILE;
+    const p = this.player;
+    // Les marges laissent de l'air sous le HUD (en haut) et la barre de vie (en bas).
+    this.cam.x = Math.round(mw <= vw ? -(vw - mw) / 2 : clamp(p.x * TILE - vw / 2, -CAM_PAD_X, mw - vw + CAM_PAD_X));
+    this.cam.y = Math.round(mh <= vh ? -(vh - mh) / 2 : clamp(p.y * TILE - vh / 2, -CAM_PAD_TOP, mh - vh + CAM_PAD_BOTTOM));
+  }
+
+  screenOf(wx, wy) {
+    return { x: Math.round(wx * TILE - this.cam.x), y: Math.round(wy * TILE - this.cam.y) };
   }
 
   updateAmbience(dt) {
     const room = this.room;
-    if (!room) return;
     for (const p of room.particles) {
-      p.x += p.vx * dt * p.speed;
-      p.y += p.vy * dt * p.speed;
-      if (p.x < 1.5) { p.x = 1.5; p.vx = Math.abs(p.vx); }
-      else if (p.x > W - 1.5) { p.x = W - 1.5; p.vx = -Math.abs(p.vx); }
-      if (p.y < 1.5) { p.y = 1.5; p.vy = Math.abs(p.vy); }
-      else if (p.y > H - 1.5) { p.y = H - 1.5; p.vy = -Math.abs(p.vy); }
-      if (room.walls.has(Math.floor(p.y) * W + Math.floor(p.x))) {
-        p.vx = -p.vx;
-        p.vy = -p.vy;
-      }
+      const nx = p.x + p.vx * dt * p.speed;
+      const ny = p.y + p.vy * dt * p.speed;
+      if (this.isWall(Math.floor(nx), Math.floor(p.y))) p.vx = -p.vx;
+      else p.x = nx;
+      if (this.isWall(Math.floor(p.x), Math.floor(ny))) p.vy = -p.vy;
+      else p.y = ny;
     }
+  }
+
+  magnet() {
+    return MAGNET * (1 + 0.6 * this.perk('magnet'));
+  }
+
+  updatePickups(dt) {
+    const room = this.room;
+    const p = this.player;
+    if (room.key && Math.hypot(room.key.x + 0.5 - p.x, room.key.y + 0.5 - p.y) < 0.7) this.pickKey();
+    room.pickups = room.pickups.filter(pk => {
+      pk.t += dt;
+      const d = Math.hypot(pk.x - p.x, pk.y - p.y);
+      if (d < 0.7) {
+        this.heal(1);
+        return false;
+      }
+      if (d < this.magnet() && pk.t > ORB_DELAY) {
+        pk.x += ((p.x - pk.x) / d) * 6 * dt;
+        pk.y += ((p.y - pk.y) / d) * 6 * dt;
+      }
+      return pk.t < 20;
+    });
+  }
+
+  // Les orbes jaillissent, puis filent vers le joueur : jamais d'XP perdue.
+  updateOrbs(dt) {
+    const room = this.room;
+    const p = this.player;
+    let got = 0;
+    room.orbs = room.orbs.filter(o => {
+      o.t += dt;
+      const dx = p.x - o.x;
+      const dy = p.y - o.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (o.t > ORB_DELAY) {
+        const pull = (d < this.magnet() ? 26 : 9) * dt;
+        o.vx += (dx / d) * pull;
+        o.vy += (dy / d) * pull;
+        o.vx *= 0.92;
+        o.vy *= 0.92;
+      } else {
+        o.vx *= 0.88;
+        o.vy *= 0.88;
+      }
+      o.x += o.vx * dt;
+      o.y += o.vy * dt;
+      if (d < 0.45 && o.t > ORB_DELAY) {
+        got += o.value;
+        return false;
+      }
+      return true;
+    });
+    if (got) {
+      this.sfx.xp();
+      this.gainXp(got);
+    }
+  }
+
+  moveToward(e, gx, gy, speed, dt) {
+    const dx = gx - e.x;
+    const dy = gy - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 0.01) return;
+    const nx = e.x + (dx / d) * speed * dt;
+    const ny = e.y + (dy / d) * speed * dt;
+    // Les créatures n'entrent pas dans la zone sûre (elles peuvent en sortir).
+    const outside = !this.inSafe(e.x, e.y);
+    if (this.canStand(nx, e.y) && !(outside && this.inSafe(nx, e.y))) e.x = nx;
+    if (this.canStand(e.x, ny) && !(outside && this.inSafe(e.x, ny))) e.y = ny;
+  }
+
+  // Poursuite : en ligne droite si la cible est visible, sinon on descend le
+  // champ de distance du joueur, ce qui fait suivre les couloirs.
+  chase(e, dt, speed) {
+    const room = this.room;
+    const p = this.player;
+    if (this.isVisible(e.x, e.y)) {
+      this.moveToward(e, p.x, p.y, speed, dt);
+      return;
+    }
+    const t = this.tileOf(e);
+    const s = room.playerField && stepDown(room.playerField, room.W, room.H, t.x, t.y);
+    if (s) this.moveToward(e, s.x + 0.5, s.y + 0.5, speed, dt);
+  }
+
+  fieldDist(e) {
+    const room = this.room;
+    const t = this.tileOf(e);
+    return room.playerField ? room.playerField[t.y * room.W + t.x] : -1;
   }
 
   updateCreatures(dt) {
     const room = this.room;
-    if (!room) return;
-    const p = this.player;
-    const alive = (m) => !m.dying;
-
-    for (const m of room.monsters) {
-      if (!alive(m)) continue;
-      const dx = p.x - m.x;
-      const dy = p.y - m.y;
-      const d = Math.hypot(dx, dy);
-      if (m.kick) {
-        m.x += m.kick.x * dt;
-        m.y += m.kick.y * dt;
-        m.kick.x *= 0.86;
-        m.kick.y *= 0.86;
-        if (Math.hypot(m.kick.x, m.kick.y) < 0.05) m.kick = null;
-      } else if (d < m.type.aggro && d > 0.01) {
-        const nx = m.x + (dx / d) * m.type.speed * dt;
-        const ny = m.y + (dy / d) * m.type.speed * dt;
-        if (this.canStand(nx, m.y)) m.x = nx;
-        if (this.canStand(m.x, ny)) m.y = ny;
-      } else {
-        m.turnT -= dt;
-        if (m.turnT <= 0) {
-          m.turnT = 1.2 + Math.random() * 2;
-          m.angle = Math.random() * Math.PI * 2;
-        }
-        const nx = m.x + Math.cos(m.angle) * m.type.speed * 0.4 * dt;
-        const ny = m.y + Math.sin(m.angle) * m.type.speed * 0.4 * dt;
-        if (this.canStand(nx, m.y)) m.x = nx;
-        if (this.canStand(m.x, ny)) m.y = ny;
-      }
-      if (d < 0.62) this.damagePlayer(m.type.dmg, m.x, m.y);
+    for (const m of room.monsters.slice()) {
+      if (!m.dying) updateMonster(this, m, dt);
     }
-
-    const b = room.boss;
-    if (b && !b.dead) {
-      if (b.kick) {
-        b.x += b.kick.x * dt * 0.5;
-        b.y += b.kick.y * dt * 0.5;
-        b.kick.x *= 0.9;
-        b.kick.y *= 0.9;
-        if (Math.hypot(b.kick.x, b.kick.y) < 0.05) b.kick = null;
-      } else {
-        const dx = p.x - b.x;
-        const dy = p.y - b.y;
-        const d = Math.hypot(dx, dy);
-        if (d > 0.01) {
-          const nx = b.x + (dx / d) * b.speed * dt;
-          const ny = b.y + (dy / d) * b.speed * dt;
-          if (this.canStand(nx, b.y)) b.x = nx;
-          if (this.canStand(b.x, ny)) b.y = ny;
-        }
-        if (d < 0.68) this.damagePlayer(b.dmg, b.x, b.y);
-      }
-      if (b.hp <= 0 && !b.dead) {
-        b.dead = true;
-        this.sfx.bossKill();
-        this.heal(3);
-        this.gainXp(BOSS.xp);
-        this.defeatedBosses.add(room.node._key);
-        if (this.cb.onBossDefeat) this.cb.onBossDefeat(room.node, b);
+    room.monsters = room.monsters.filter(m => !m.dying);
+    if (room.boss && !room.boss.dead) updateBoss(this, room.boss, dt);
+    updateProjectiles(this, dt);
+    for (const e of [...room.monsters, ...(room.boss && !room.boss.dead ? [room.boss] : [])]) {
+      if (!e.burn) continue;
+      e.burn.t -= dt;
+      if (Math.random() < dt * 12) this.fx.sparks.push({ x: e.x + (Math.random() - 0.5) * 0.5, y: e.y, vx: 0, vy: -1.5, color: '#ff9a3c', t: 0, life: 0.4 });
+      if (e.burn.t <= 0) {
+        const dmg = e.burn.dmg;
+        e.burn = null;
+        this.hurt(e, dmg, e.x, e.y + 0.01, { pierce: true });
       }
     }
   }
 
-  damagePlayer(dmg, mx, my) {
+  // Écho : l'XP perdue à la mort attend là où l'on est tombé.
+  updateEcho() {
+    const e = this.echo;
+    if (!e || e.sk !== `${this.mode}:${this.room.node._key}`) return;
     const p = this.player;
+    if (Math.hypot(e.x - p.x, e.y - p.y) < 0.7) {
+      this.echo = null;
+      this.stats.echoes++;
+      this.burst(p.x, p.y, '#c77bff', 20, 4);
+      this.float(p.x, p.y - 1, `écho récupéré +${e.xp} XP`, '#dca8ff');
+      this.sfx.warp();
+      this.gainXp(e.xp, { raw: true });
+      this.dirty = true;
+    }
+  }
+
+  damagePlayer(dmg, mx, my, src = null) {
+    const p = this.player;
+    if (this.dead) return;
+    if (this.dodgeT > 0) {
+      if (!this.dodgeAvoided) {
+        this.dodgeAvoided = true;
+        this.stats.dodges++;
+        this.dirty = true;
+        this.float(p.x, p.y - 0.9, 'esquive', '#9fe0ff');
+      }
+      return;
+    }
     if (p.invuln > 0) return;
+    if (src && this.relic('thorns') && !src.dying && !src.dead) this.hurt(src, this.relic('thorns'), p.x, p.y, { pierce: true });
+    if (this.aegisLeft > 0) {
+      this.aegisLeft--;
+      p.invuln = 0.8;
+      this.sfx.clang();
+      this.float(p.x, p.y - 0.9, 'égide', '#9fe0ff');
+      this.burst(p.x, p.y, '#9fe0ff', 12, 3);
+      return;
+    }
     p.hp -= dmg;
     p.invuln = 1.1;
-    this.flash = 0.4;
     this.sfx.hurt();
+    this.float(p.x, p.y - 0.9, `-${dmg}`, '#ff6a6a');
+    this.burst(p.x, p.y, '#ff6a6a', 8, 3.5);
+    this.freeze(0.06);
+    this.shake(3, 0.25);
     const ang = Math.atan2(p.y - my, p.x - mx);
     p.kx = Math.cos(ang) * 2.4;
     p.ky = Math.sin(ang) * 2.4;
+    if (p.hp <= 0 && this.perk('phoenix') && !this.phoenixUsed) {
+      this.phoenixUsed = true;
+      p.hp = 1;
+      p.invuln = 2;
+      this.float(p.x, p.y - 1.2, 'seconde chance', '#ffd23f');
+      this.burst(p.x, p.y, '#ffd23f', 24, 5);
+      this.sfx.levelUp();
+    }
     if (p.hp <= 0) {
       p.hp = 0;
-this.stats.deaths++;
-    this.dead = true;
-    this.sfx.error();
-    if (this.cb.onDeath) this.cb.onDeath(this.room.node);
+      this.stats.deaths++;
+      this.dead = true;
+      this.dirty = true;
+      this.sfx.error();
+      // La moitié de la progression du niveau en cours reste au sol (jamais de niveau perdu).
+      const lost = Math.floor((p.xp - xpForLevel(p.level)) * ECHO_SHARE);
+      this.echo = lost > 0 ? { sk: `${this.mode}:${this.room.node._key}`, x: p.x, y: p.y, xp: lost } : null;
+      p.xp -= Math.max(0, lost);
+      if (this.cb.onDeath) this.cb.onDeath(this.room.node, Math.max(0, lost));
     }
   }
 
   respawn() {
     if (!this.room) return;
-    const key = this.room.node._key;
-    const spawn = { x: W / 2, y: H - 2 };
     this.dead = false;
+    this.player.maxHp = this.maxHp();
     this.player.hp = this.player.maxHp;
     this.player.invuln = 1.5;
-    this.goTo(key, spawn);
+    this.goTo(this.room.node._key, { from: null });
     this.sfx.door();
-  }
-
-  screenOf(wx, wy) {
-    return {
-      x: Math.round(wx * TILE + OFF_X),
-      y: Math.round(wy * TILE + OFF_Y),
-    };
-  }
-
-  render() {
-    const ctx = this.ctx;
-    const room = this.room;
-    ctx.fillStyle = '#05060d';
-    ctx.fillRect(0, 0, VIEW_W * TILE, VIEW_H * TILE);
-    if (!room) return;
-
-    const { spr } = room;
-    const seedBase = hashStr(room.node.path || room.node.name || room.node.id);
-    const guarded = room.boss && !room.boss.dead;
-
-    const interactCells = new Set();
-    const putInteract = (list) => {
-      for (const it of list) interactCells.add(it.y * W + it.x);
-    };
-    putInteract(room.notes);
-    putInteract(room.portals);
-    if (room.library) putInteract([room.library]);
-    if (room.sign) putInteract([room.sign]);
-
-    for (let ty = 0; ty < H; ty++) {
-      for (let tx = 0; tx < W; tx++) {
-        const idx = ty * W + tx;
-        if (!room.explored[idx]) continue;
-        const px = Math.round(tx * TILE + OFF_X);
-        const py = Math.round(ty * TILE + OFF_Y);
-        const isWall = room.walls.has(idx);
-        if (isWall) {
-          ctx.drawImage(spr.wall, px, py);
-        } else {
-          const variant = (tx + ty + (seedBase % 3)) % 3;
-          ctx.drawImage(spr.floors[variant], px, py);
-          if ((tx + ty) % 5 !== 1 && !interactCells.has(idx)) {
-            const dc = hashStr(`${seedBase}:${tx}:${ty}`) % 1000;
-            if (dc < 220) ctx.drawImage(spr.decor[dc % spr.decor.length], px, py);
-          }
-        }
-        if (!room.visible[idx]) {
-          ctx.fillStyle = 'rgba(4,5,10,0.62)';
-          ctx.fillRect(px, py, TILE, TILE);
-        }
-      }
-    }
-
-    const vis = (x, y) => room.visible[y * W + x];
-
-    for (const pt of room.portals) {
-      if (!vis(pt.x, pt.y)) continue;
-      const px = Math.round(pt.x * TILE + OFF_X);
-      const py = Math.round(pt.y * TILE + OFF_Y);
-      ctx.drawImage(pt.kind === 'back' ? spr.gateBack : spr.gate, px, py);
-      const wave = Math.sin(this.time * 4 + pt.x * 3) * 0.5 + 0.5;
-      ctx.fillStyle = `rgba(255,255,255,${0.15 + 0.4 * wave})`;
-      ctx.fillRect(px + 2, py + 2 + ((wave * 4) | 0), 4, 1);
-      if (pt.kind === 'back') ctx.drawImage(spr.upArrow, px, py - 8);
-    }
-
-    for (const note of room.notes) {
-      if (!vis(note.x, note.y)) continue;
-      const px = Math.round(note.x * TILE + OFF_X);
-      let py = Math.round(note.y * TILE + OFF_Y);
-      const collected = this.collected.has(note.node.path);
-      if (!collected) py += Math.round(Math.sin(this.time * 2.6 + note.seed) * 1);
-      if (collected) {
-        ctx.globalAlpha = 0.25;
-      } else if (guarded) {
-        ctx.globalAlpha = 0.82;
-        ctx.fillStyle = 'rgba(90,30,140,0.5)';
-        ctx.fillRect(px - 1, py - 1, 10, 10);
-        const pulse = Math.sin(this.time * 3 + note.seed) * 0.5 + 0.5;
-        ctx.fillStyle = `rgba(255,70,120,${0.25 + 0.5 * pulse})`;
-        ctx.fillRect(px + 1, py + 1, 6, 6);
-      }
-      ctx.drawImage(spr.note, px, py);
-      ctx.globalAlpha = 1;
-      if (!collected) {
-        const s = (this.time * 5 + note.seed) % 6;
-        if (s < 2) ctx.fillStyle = '#ffffff';
-        else ctx.fillStyle = '#ffe08a';
-        ctx.fillRect(px + 2 + ((s * 3) % 4), py + 4, 1, 1);
-      }
-    }
-
-    if (room.library && vis(room.library.x, room.library.y)) {
-      ctx.drawImage(spr.library, Math.round(room.library.x * TILE + OFF_X), Math.round(room.library.y * TILE + OFF_Y));
-    }
-    if (room.sign && vis(room.sign.x, room.sign.y)) {
-      ctx.drawImage(spr.sign, Math.round(room.sign.x * TILE + OFF_X), Math.round(room.sign.y * TILE + OFF_Y));
-    }
-
-    for (const m of room.monsters) {
-      if (m.dying) continue;
-      const idx = Math.floor(m.y) * W + Math.floor(m.x);
-      if (!room.visible[idx]) continue;
-      this.renderMonster(m);
-    }
-
-    const b = room.boss;
-    if (b && vis(Math.floor(b.x), Math.floor(b.y))) {
-      const dir = this.frames;
-      void dir;
-      const bob = b.dead ? 0 : Math.sin(this.time * 2.2 + b.seed) * 1;
-      const s = this.screenOf(b.x, b.y);
-      ctx.globalAlpha = b.dead ? 0.35 : 1;
-      ctx.drawImage(spr.boss, s.x - 8, s.y - 9 + Math.round(bob));
-      ctx.globalAlpha = 1;
-      if (!b.dead) {
-        const flash = Math.sin(this.time * 7) * 0.5 + 0.5;
-        ctx.fillStyle = `rgba(255,106,74,${0.2 + 0.4 * flash})`;
-        ctx.fillRect(s.x - 8, s.y - 9 + Math.round(bob), 16, 2);
-        ctx.fillRect(s.x - 8, s.y + 5 + Math.round(bob), 16, 2);
-      }
-    }
-
-    this.renderParticles();
-    this.renderPlayer();
-
-    const map = this.renderMinimapBuffer();
-    this.mctx.putImageData(map, 0, 0);
-  }
-
-  renderMonster(m) {
-    const ctx = this.ctx;
-    const spr = this.room.spr;
-    const bob = Math.sin(this.time * 4 + m.seed) * 1;
-    const s = this.screenOf(m.x, m.y);
-    if (m.type.name === 'limaçon') {
-      ctx.drawImage(spr.slime, s.x - 4, s.y - 5 + Math.round(bob));
-    } else {
-      ctx.save();
-      ctx.translate(s.x, s.y);
-      if (this.player.x < m.x) ctx.scale(-1, 1);
-      ctx.drawImage(spr.bat, -4, -5 + Math.round(bob * 1.5));
-      ctx.restore();
-    }
-    if (m.hp < m.type.hp || m.kick) {
-      ctx.fillStyle = '#191b2c';
-      ctx.fillRect(s.x - 5, s.y - 9, 10, 2);
-      ctx.fillStyle = '#ff6a4a';
-      ctx.fillRect(s.x - 4, s.y - 8, (m.hp / m.type.hp) * 8, 1);
-    }
-  }
-
-  renderParticles() {
-    const ctx = this.ctx;
-    const room = this.room;
-    const spr = room.spr;
-    for (const p of room.particles) {
-      const idx = Math.floor(p.y) * W + Math.floor(p.x);
-      if (!room.visible[idx]) continue;
-      const s = this.screenOf(p.x, p.y);
-      const pulse = Math.sin(this.time * p.speed + p.seed) * 0.5 + 0.5;
-      ctx.globalAlpha = 0.25 + 0.5 * pulse;
-      ctx.drawImage(spr.wisp, s.x - 4, s.y - 4);
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  renderPlayer() {
-    const ctx = this.ctx;
-    const p = this.player;
-    const px = Math.round(p.x * TILE + OFF_X) - 6;
-    const py = Math.round(p.y * TILE + OFF_Y) - 6;
-    const frame = this.walking ? Math.floor(this.walkT * 10) % 2 : 0;
-    const bob = this.walking ? Math.sin(this.walkT * 16) : 0;
-
-    ctx.save();
-    if (p.facing === 2) {
-      ctx.translate(px + 6, py + 6);
-      ctx.scale(-1, 1);
-      ctx.translate(-(px + 6), -(py + 6));
-    }
-    ctx.drawImage(this.frames[frame], px, py + Math.round(bob));
-    ctx.restore();
-
-    if (this.attackT > 0) {
-      const dir = FACING[p.facing];
-      const cx = p.x * TILE + OFF_X;
-      const cy = p.y * TILE + OFF_Y;
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      const t = this.attackT / 0.22;
-      const reach = (6 + (7 * (1 - t))) * 1;
-      const sw = FACING[p.facing].y !== 0 ? 2 : 3 + Math.round((1 - t) * 2);
-      const sh = FACING[p.facing].y !== 0 ? 3 + Math.round((1 - t) * 2) : 2;
-      const sx = cx + dir.x * reach - (dir.x !== 0 ? 1 : 0);
-      const sy = cy + dir.y * reach - (dir.y !== 0 ? 1 : 0);
-      ctx.fillRect(Math.round(sx), Math.round(sy), sw, sh);
-    }
-
-    if (p.invuln > 0 && Math.floor(this.time * 14) % 2 === 0) {
-      ctx.globalAlpha = 0.5;
-      ctx.drawImage(this.frames[frame], px, py + Math.round(bob));
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  renderMinimapBuffer() {
-    const room = this.room;
-    const buf = this._mmBuf || (this._mmBuf = this.mctx.createImageData(W, H));
-    const d = buf.data;
-    for (let i = 0; i < W * H; i++) {
-      const ty = (i / W) | 0;
-      const tx = i % W;
-      if (!room.explored[i]) {
-        d[i * 4] = 3;
-        d[i * 4 + 1] = 4;
-        d[i * 4 + 2] = 8;
-        d[i * 4 + 3] = 255;
-        continue;
-      }
-      const isWall = room.walls.has(i);
-      let r = 46, g = 70, b = 42;
-      if (isWall) {
-        r = 90; g = 96; b = 104;
-      }
-      if (!room.visible[i]) {
-        r = Math.round(r * 0.45);
-        g = Math.round(g * 0.45);
-        b = Math.round(b * 0.45);
-      }
-      d[i * 4] = r;
-      d[i * 4 + 1] = g;
-      d[i * 4 + 2] = b;
-      d[i * 4 + 3] = 255;
-    }
-    const vis = (x, y) => y >= 0 && y < H && room.visible[y * W + x];
-    for (const pt of room.portals) {
-      if (!vis(pt.x, pt.y)) continue;
-      const i = (pt.y * W + pt.x) * 4;
-      d[i] = 255; d[i + 1] = 210; d[i + 2] = 63; d[i + 3] = 255;
-    }
-    for (const note of room.notes) {
-      if (this.collected.has(note.node.path)) continue;
-      if (!vis(note.x, note.y)) continue;
-      const i = (note.y * W + note.x) * 4;
-      d[i] = 255; d[i + 1] = 224; d[i + 2] = 138; d[i + 3] = 255;
-    }
-    if (room.library && vis(room.library.x, room.library.y)) {
-      const i = (room.library.y * W + room.library.x) * 4;
-      d[i] = 180; d[i + 1] = 120; d[i + 2] = 60; d[i + 3] = 255;
-    }
-    if (room.boss && !room.boss.dead && vis(Math.floor(room.boss.x), Math.floor(room.boss.y))) {
-      const i = (Math.floor(room.boss.y) * W + Math.floor(room.boss.x)) * 4;
-      d[i] = 255; d[i + 1] = 60; d[i + 2] = 80; d[i + 3] = 255;
-    }
-    const pi = (Math.floor(this.player.y) * W + Math.floor(this.player.x)) * 4;
-    d[pi] = 74; d[pi + 1] = 255; d[pi + 2] = 216; d[pi + 3] = 255;
-    return buf;
   }
 }

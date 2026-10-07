@@ -1,34 +1,33 @@
 export const ACHIEVEMENTS = [
-  { id: 'firstNote', icon: '✦', name: 'Premier parchemin', desc: 'obtenir sa première mémoire.' },
-  { id: 'note10', icon: '✦', name: 'Collectionneur', desc: 'obtenir 10 parchemins.' },
-  { id: 'note25', icon: '✦', name: 'Archiviste', desc: 'obtenir 25 parchemins.' },
-  { id: 'visit5', icon: '☗', name: 'Pérégrin', desc: 'visiter 5 salles du donjon.' },
-  { id: 'visit15', icon: '☗', name: 'Explorateur', desc: 'visiter 15 salles.' },
-  { id: 'reveal', icon: '◉', name: 'Cartographe', desc: 'révéler entièrement une salle.' },
-  { id: 'kill1', icon: '⚔', name: 'Épée novice', desc: 'vaincre une créature.' },
-  { id: 'kill10', icon: '⚔', name: 'Tueur de donjon', desc: 'vaincre 10 créatures.' },
-  { id: 'boss1', icon: '♛', name: 'Brise-voûte', desc: 'vaincre son premier gardien.' },
-  { id: 'boss3', icon: '♛', name: 'Grand justicier', desc: 'vaincre 3 gardiens.' },
-  { id: 'lvl3', icon: '★', name: 'Aguerri', desc: 'atteindre le niveau 3.' },
-  { id: 'lvl5', icon: '★', name: 'Légende', desc: 'atteindre le niveau 5.' },
-  { id: 'death1', icon: '☠', name: 'Phénix', desc: 'survivre une première fois à la mort.' },
+  { id: 'firstNote', icon: '✦', name: 'Premier parchemin', desc: 'obtenir sa première mémoire.', test: s => s.notes >= 1 },
+  { id: 'note10', icon: '✦', name: 'Collectionneur', desc: 'obtenir 10 parchemins.', test: s => s.notes >= 10 },
+  { id: 'note25', icon: '✦', name: 'Archiviste', desc: 'obtenir 25 parchemins.', test: s => s.notes >= 25 },
+  { id: 'legend', icon: '❖', name: 'Relique', desc: 'obtenir un parchemin légendaire.', test: s => s.legendary >= 1 },
+  { id: 'orphan5', icon: '✧', name: 'Recueilleur', desc: 'recueillir 5 parchemins orphelins (sans aucun lien).', test: s => s.orphans >= 5 },
+  { id: 'visit5', icon: '☗', name: 'Pérégrin', desc: 'visiter 5 salles du donjon.', test: s => s.rooms >= 5 },
+  { id: 'visit15', icon: '☗', name: 'Explorateur', desc: 'visiter 15 salles.', test: s => s.rooms >= 15 },
+  { id: 'deep', icon: '▼', name: 'Spéléologue', desc: 'descendre à la profondeur 4.', test: s => s.depth >= 4 },
+  { id: 'reveal', icon: '◉', name: 'Cartographe', desc: 'révéler entièrement une salle.', test: s => s.revealed },
+  { id: 'clear1', icon: '✓', name: 'Nettoyeur', desc: 'collecter tous les parchemins d’une salle.', test: s => s.cleared >= 1 },
+  { id: 'link1', icon: '⇄', name: 'Fil d’Ariane', desc: 'suivre un lien entre deux mémoires.', test: s => s.links >= 1 },
+  { id: 'link10', icon: '⇄', name: 'Tisseur', desc: 'suivre 10 liens.', test: s => s.links >= 10 },
+  { id: 'kill1', icon: '⚔', name: 'Épée novice', desc: 'vaincre une créature.', test: s => s.kills >= 1 },
+  { id: 'kill10', icon: '⚔', name: 'Tueur de donjon', desc: 'vaincre 10 créatures.', test: s => s.kills >= 10 },
+  { id: 'boss1', icon: '♛', name: 'Brise-voûte', desc: 'vaincre son premier gardien.', test: s => s.bosses >= 1 },
+  { id: 'boss3', icon: '♛', name: 'Grand justicier', desc: 'vaincre 3 gardiens.', test: s => s.bosses >= 3 },
+  { id: 'reflect1', icon: '↺', name: 'Renvoyeur', desc: 'renvoyer un projectile d’un coup d’épée.', test: s => s.reflects >= 1 },
+  { id: 'dodge10', icon: '≋', name: 'Insaisissable', desc: 'éviter 10 attaques en esquivant (SHIFT).', test: s => s.dodges >= 10 },
+  { id: 'stun1', icon: '✶', name: 'Torero', desc: 'étourdir un ennemi en le faisant charger un mur.', test: s => s.stuns >= 1 },
+  { id: 'unlock1', icon: '⚷', name: 'Passe-partout', desc: 'ouvrir une voûte scellée avec sa clé.', test: s => s.unlocks >= 1 },
+  { id: 'chest3', icon: '▣', name: 'Pilleur', desc: 'ouvrir 3 coffres.', test: s => s.chests >= 3 },
+  { id: 'secret1', icon: '░', name: 'Fouineur', desc: 'briser un mur fissuré.', test: s => s.secrets >= 1 },
+  { id: 'perk5', icon: '✚', name: 'Polyvalent', desc: 'choisir 5 dons.', test: s => s.perks >= 5 },
+  { id: 'relic1', icon: '❖', name: 'Reliquaire', desc: 'obtenir une relique (dans une note légendaire).', test: s => s.relics >= 1 },
+  { id: 'relic5', icon: '❖', name: 'Gardien des reliques', desc: 'posséder 5 reliques.', test: s => s.relics >= 5 },
+  { id: 'seal3', icon: '✓', name: 'Scelleur', desc: 'compléter 3 dossiers (3 sceaux).', test: s => s.seals >= 3 },
+  { id: 'daily1', icon: '☀', name: 'Assidu', desc: 'terminer les notes du jour.', test: s => s.dailies >= 1 },
+  { id: 'echo1', icon: '☽', name: 'Revenant', desc: 'récupérer son écho après une mort.', test: s => s.echoes >= 1 },
+  { id: 'lvl3', icon: '★', name: 'Aguerri', desc: 'atteindre le niveau 3.', test: s => s.level >= 3 },
+  { id: 'lvl5', icon: '★', name: 'Légende', desc: 'atteindre le niveau 5.', test: s => s.level >= 5 },
+  { id: 'death1', icon: '☠', name: 'Phénix', desc: 'survivre une première fois à la mort.', test: s => s.deaths >= 1 },
 ];
-
-export function achievementTest(id, s) {
-  switch (id) {
-    case 'firstNote': return s.notes >= 1;
-    case 'note10': return s.notes >= 10;
-    case 'note25': return s.notes >= 25;
-    case 'visit5': return s.rooms >= 5;
-    case 'visit15': return s.rooms >= 15;
-    case 'reveal': return s.revealed === true;
-    case 'kill1': return s.kills >= 1;
-    case 'kill10': return s.kills >= 10;
-    case 'boss1': return s.bosses >= 1;
-    case 'boss3': return s.bosses >= 3;
-    case 'lvl3': return s.level >= 3;
-    case 'lvl5': return s.level >= 5;
-    case 'death1': return s.deaths >= 1;
-    default: return false;
-  }
-}

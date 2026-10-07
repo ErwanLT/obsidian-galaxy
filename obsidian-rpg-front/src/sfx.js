@@ -28,6 +28,11 @@ export function isMuted() {
   return muted;
 }
 
+// Contexte et bus maître partagés avec la musique (le mute coupe tout).
+export function audio() {
+  return ctx ? { ctx, out: gainNode } : null;
+}
+
 function blip(freq, dur, type = 'square', vol = 1, delay = 0, slide = 0) {
   if (!ctx || muted) return;
   const t = ctx.currentTime + delay;
@@ -107,6 +112,55 @@ export const sfx = {
   },
   levelUp() {
     [523, 659, 784, 1046, 1318].forEach((f, i) => blip(f, 0.12, 'square', 0.4, i * 0.09));
+  },
+  dodge() {
+    noise(0.12, 0.25, 0, 1800);
+    blip(300, 0.1, 'triangle', 0.15, 0, 260);
+  },
+  aim() {
+    blip(520, 0.3, 'triangle', 0.12, 0, 400);
+  },
+  shoot() {
+    blip(880, 0.08, 'square', 0.18, 0, -500);
+  },
+  reflect() {
+    blip(1568, 0.06, 'square', 0.3);
+    blip(2093, 0.1, 'triangle', 0.3, 0.05);
+  },
+  clang() {
+    blip(1200, 0.08, 'square', 0.3, 0, -300);
+    noise(0.05, 0.3, 0, 5000);
+  },
+  windup() {
+    blip(160, 0.45, 'sawtooth', 0.22, 0, 220);
+  },
+  charge() {
+    noise(0.3, 0.35, 0, 600);
+    blip(110, 0.25, 'sawtooth', 0.3, 0, -40);
+  },
+  thud() {
+    noise(0.18, 0.55, 0, 400);
+    blip(70, 0.2, 'square', 0.45, 0, -30);
+  },
+  slam() {
+    noise(0.4, 0.6, 0, 500);
+    blip(55, 0.35, 'sawtooth', 0.5, 0, -20);
+  },
+  key() {
+    [784, 988, 1175, 1568].forEach((f, i) => blip(f, 0.1, 'triangle', 0.4, i * 0.06));
+  },
+  unlock() {
+    blip(220, 0.08, 'square', 0.4);
+    blip(330, 0.08, 'square', 0.35, 0.08);
+    noise(0.35, 0.4, 0.12, 700);
+    [392, 523, 659, 784].forEach((f, i) => blip(f, 0.14, 'triangle', 0.4, 0.2 + i * 0.08));
+  },
+  chest() {
+    noise(0.1, 0.3, 0, 1200);
+    [523, 659, 784, 1046, 1318].forEach((f, i) => blip(f, 0.08, 'square', 0.35, 0.08 + i * 0.05));
+  },
+  xp() {
+    blip(1320 + Math.random() * 200, 0.05, 'square', 0.18);
   },
   heal() {
     blip(880, 0.08, 'triangle', 0.4);

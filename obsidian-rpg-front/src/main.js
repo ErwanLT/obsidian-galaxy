@@ -1,136 +1,184 @@
 import './style.css';
-import { fetchUniverse, buildDemoWorld, buildWorld } from './universe.js';
+import { fetchUniverse, buildDemoWorld, buildWorld, RARITY } from './universe.js';
 import { Game } from './game.js';
-import { ACHIEVEMENTS, achievementTest } from './achieve.js';
+import { Renderer } from './render.js';
+import { CLASSIC, DUNGEON } from './worldgen.js';
+import { ACHIEVEMENTS } from './achieve.js';
+import { PERK_BY_ID, rollPerks, perkTotal } from './perks.js';
+import { RELICS } from './relics.js';
+import { nextHint } from './hints.js';
+import { folderProgress, pct, searchNotes, xpForLevel } from './nav.js';
+import { h, button, row, list, Modal } from './ui.js';
+import { setupTouch } from './touch.js';
 import * as Sfx from './sfx.js';
+import * as Music from './music.js';
 import * as prog from './progress.js';
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const mctx = document.getElementById('minimap').getContext('2d');
+const $ = id => document.getElementById(id);
+const canvas = $('game');
 
 const el = {
-  boot: document.getElementById('boot'),
-  bootMsg: document.getElementById('boot-msg'),
-  bootActions: document.getElementById('boot-actions'),
-  bootRetry: document.getElementById('boot-retry'),
-  bootDemo: document.getElementById('boot-demo'),
-  roomName: document.getElementById('room-name'),
-  roomPath: document.getElementById('room-path'),
-  crumb: document.getElementById('crumb'),
-  stCol: document.getElementById('st-col'),
-  stRooms: document.getElementById('st-rooms'),
-  stIn: document.getElementById('st-inroom'),
-  prompt: document.getElementById('prompt'),
-  toast: document.getElementById('toast'),
-  modal: document.getElementById('modal'),
-  modalTitle: document.getElementById('modal-title'),
-  modalBody: document.getElementById('modal-body'),
-  modalClose: document.getElementById('modal-close'),
-  hearts: document.getElementById('hearts'),
-  xp: document.getElementById('xp'),
-  bossbar: document.getElementById('bossbar'),
-  bossName: document.getElementById('boss-name'),
-  bossFill: document.getElementById('boss-fill'),
-  death: document.getElementById('death'),
-  deathRetry: document.getElementById('death-retry'),
-  achCount: document.getElementById('ach-count'),
-  btnInv: document.getElementById('btn-inv'),
-  btnAch: document.getElementById('btn-ach'),
+  boot: $('boot'),
+  bootMsg: $('boot-msg'),
+  bootActions: $('boot-actions'),
+  roomName: $('room-name'),
+  roomPath: $('room-path'),
+  quest: $('quest'),
+  crumb: $('crumb'),
+  stCol: $('st-col'),
+  stRooms: $('st-rooms'),
+  stIn: $('st-inroom'),
+  prompt: $('prompt'),
+  toast: $('toast'),
+  hearts: $('hearts'),
+  xp: $('xp'),
+  bossbar: $('bossbar'),
+  bossName: $('boss-name'),
+  bossFill: $('boss-fill'),
+  death: $('death'),
+  deathMsg: $('death-msg'),
+  deathRetry: $('death-retry'),
+  achCount: $('ach-count'),
+  modeLabel: $('mode-label'),
+  controls: $('controls'),
+  hint: $('hint'),
 };
 
-const hearts = [];
-for (let i = 0; i < 5; i++) {
-  const s = document.createElement('span');
-  s.textContent = '♥';
-  el.hearts.appendChild(s);
-  hearts.push(s);
+const keys = new Set();
+const renderer = new Renderer(canvas.getContext('2d'), $('minimap').getContext('2d'));
+let store = null;
+let progress = { total: new Map(), direct: new Map() };
+let cleared = new Set();
+let grimoireNote = null;
+let libraryNotes = null;
+
+const MUSIC_KEY = 'obsidian-quest:music';
+try {
+  Music.setEnabled(localStorage.getItem(MUSIC_KEY) !== 'off');
+} catch {
+  // préférence indisponible : musique activée par défaut
 }
 
-const keys = new Set();
+const modal = new Modal(
+  { root: $('modal'), title: $('modal-title'), body: $('modal-body'), close: $('modal-close') },
+  {
+    onOpen: () => keys.clear(),
+    onClose: () => {
+      grimoireNote = null;
+      Sfx.sfx.close();
+      canvas.focus({ preventScroll: true });
+    },
+  },
+);
 
 const game = new Game(
-  ctx,
-  mctx,
   {
-    onRoom: (node) => {
-      updateHud(node);
-      save();
+    onRoom: () => {
       el.prompt.hidden = true;
-    },
-    onCollect: (note) => {
+      Music.play(game.room.theme.name);
       save();
-      openGrimoire(note);
-      updateHud(game.room.node);
     },
-    onLibrary: (node) => openLibrary(node),
-    onRoutes: (node, extras) => openRoutes(node, extras),
-    onLevelUp: (level) => {
-      showToast(`niveau ${level} ! +1 ♥`);
+    // Ramasser ne coupe plus l'action : un message, et le Grimoire reste dans l'inventaire.
+    onCollect: (note, fresh) => {
+      if (modal.isOpen && modal.kind === 'library') openLibrary(libraryNotes);
+      else if (!fresh) openGrimoire(note);
+      if (fresh) {
+        const rare = note._rarity !== 'commune' ? ` — ${RARITY[note._rarity].label} !` : '';
+        showToast(`✦ ${note.name}${rare}  ·  I pour relire`);
+      }
     },
-    onBossDefeat: (node) => {
-      showToast('gardien vaincu — les parchemins sont libres');
-    },
-    onDeath: () => {
+    onLibrary: notes => openLibrary(notes),
+    onRoutes: extras => openRoutes(extras),
+    onLevelUp: (level, gain) => showToast(gain > 0 ? `niveau ${level} ! +${gain} ♥ max` : `niveau ${level} !`),
+    onBossDefeat: () => showToast('gardien vaincu — les parchemins sont libres'),
+    onQuestDone: note => showToast(`quête accomplie : ${note.name}`),
+    onDeath: (node, lost) => {
+      keys.clear();
+      const where = game.mode === DUNGEON ? 'le donjon t’a ramené à l’entrée de l’étage.' : 'le donjon t’a ramené aux portes de la salle.';
+      el.deathMsg.textContent = lost > 0 ? `${where}\ntu as laissé un écho de ${lost} XP là où tu es tombé : va le reprendre.` : where;
       el.death.hidden = false;
+      el.deathRetry.focus();
     },
-    onBlocked: (msg) => showToast(msg),
+    onBlocked: msg => showToast(msg),
+    onKey: () => showToast('⚷ clé de la voûte — trouve la porte scellée'),
+    onRelic: (relic, count) => showToast(`${relic.icon} relique ${count > 1 ? 'renforcée' : 'obtenue'} : ${relic.name} — ${relic.desc}`),
+    onSeal: (folder, n) => showToast(`✓ dossier « ${folder.name} » complété — sceau ${n} (+${Math.round(game.sealXpBonus() * 100)} % XP, +${game.sealHearts()} ♥)`),
+    onDailyDone: () => showToast('★ notes du jour terminées — un don et des orbes en récompense !'),
+    onChest: (loot, secret) => showToast(`${secret ? '▣ coffre caché' : '▣ coffre'} : ${loot}`),
   },
-  Sfx,
+  Sfx.sfx,
 );
 
 function save() {
-  prog.saveProgress({
-    collected: [...game.collected],
-    stack: [...game.stack],
-    pos: { x: game.player.x, y: game.player.y },
-    hp: game.player.hp,
-    xp: game.player.xp,
-    bosses: [...game.defeatedBosses],
-    achievements: [...game.achieved],
-    stats: { kills: game.stats.kills, deaths: game.stats.deaths },
-  });
+  if (store && game.room) store.save(game.snapshot());
 }
 
-el.modalClose.addEventListener('click', closeModal);
-el.deathRetry.addEventListener('click', () => {
-  el.death.hidden = true;
-  game.respawn();
-});
+// ── HUD ─────────────────────────────────────────────────────────
 
-window.addEventListener('beforeunload', save);
+function refreshProgress() {
+  progress = folderProgress(game.byPath, game.collected);
+  cleared = new Set();
+  for (const d of game.world.dirs) {
+    if (d._total > 0 && (progress.total.get(d) || 0) >= d._total) cleared.add(d._key);
+  }
+}
 
-function updateHud(node) {
+function updateHud() {
+  const node = game.room.node;
   el.roomName.textContent = node.name;
   el.roomPath.textContent = node.path || node.id || '';
-  el.stCol.textContent = game.collected.size;
-  el.stRooms.textContent = game.visited.size;
-  el.stIn.textContent = game.room ? game.room.notes.length : 0;
+  el.stCol.textContent = `${game.collected.size}/${game.world.notes.length}`;
+  el.stRooms.textContent = `${game.visited.size}/${game.world.dirs.length}`;
+  el.stIn.textContent = `${progress.direct.get(node) || 0}/${node._direct || 0}`;
+  el.modeLabel.textContent = game.mode;
+  $('st-key').hidden = !(game.room.state.hasKey && game.room.doors.length);
 
-  el.crumb.textContent = '';
+  if (game.quest) {
+    el.quest.hidden = false;
+    el.quest.textContent = `> quête : ${game.quest.name}`;
+  } else {
+    el.quest.hidden = true;
+  }
+
+  el.crumb.replaceChildren();
   game.stack.forEach((key, i) => {
     const n = game.byPath.get(key);
     if (!n) return;
-    const seg = document.createElement('span');
-    seg.className = 'crumb-seg';
-    seg.textContent = n.name;
+    const done = progress.total.get(n) || 0;
+    const seg = h('span', 'crumb-seg', n.name);
+    seg.title = `${done}/${n._total} parchemins (${pct(done, n._total)} %)`;
+    if (cleared.has(key)) seg.classList.add('crumb-done');
     if (i === game.stack.length - 1) {
       seg.classList.add('crumb-cur');
+      seg.textContent = `${n.name} · ${pct(done, n._total)}%`;
     } else {
-      seg.addEventListener('click', () => game.goTo(key));
+      seg.addEventListener('click', () => {
+        Sfx.sfx.back();
+        game.goTo(key);
+      });
     }
     el.crumb.appendChild(seg);
   });
 }
 
+let heartSpans = [];
 function updateVitals() {
-  const hp = Math.max(0, Math.min(hearts.length, game.player.hp));
-  for (let i = 0; i < hearts.length; i++) {
-    hearts[i].className = i < hp ? 'on' : 'off';
+  const p = game.player;
+  if (heartSpans.length !== p.maxHp) {
+    heartSpans = Array.from({ length: p.maxHp }, () => h('span', null, '♥'));
+    el.hearts.replaceChildren(...heartSpans);
   }
-  el.xp.textContent = `Lv ${game.player.level} · ${game.player.xp} XP`;
+  const hp = Math.max(0, Math.min(p.maxHp, p.hp));
+  heartSpans.forEach((s, i) => {
+    const cls = i < hp ? 'on' : 'off';
+    if (s.className !== cls) s.className = cls;
+  });
+  const next = xpForLevel(p.level + 1);
+  const xpText = `Lv ${p.level} · ${p.xp}/${next} XP`;
+  if (el.xp.textContent !== xpText) el.xp.textContent = xpText;
+
   const b = game.room && game.room.boss;
-  if (b && !b.dead) {
+  if (b && !b.dead && (b.hunting || game.isVisible(b.x, b.y))) {
     el.bossbar.hidden = false;
     el.bossName.textContent = b.name;
     el.bossFill.style.width = `${(Math.max(0, b.hp) / b.maxHp) * 100}%`;
@@ -139,365 +187,619 @@ function updateVitals() {
   }
 }
 
-function openGrimoire(note) {
-  const metaLines = [
-    ['chemin', note.path || note.id || ''],
-    ['taille', `${Math.max(1, Math.round((note.size || 0) / 1024))} ko`],
-    ['liens', `${(note.links || []).length}`],
-    ['profondeur', `${note.depth}`],
-  ];
-
-  el.modalTitle.textContent = 'Grimoire — parchemin';
-  const root = document.createElement('div');
-  root.className = 'grimoire';
-
-  const name = document.createElement('div');
-  name.className = 'g-name';
-  name.textContent = note.name;
-  root.appendChild(name);
-
-  const meta = document.createElement('div');
-  meta.className = 'g-meta';
-  for (const [k, v] of metaLines) {
-    const row = document.createElement('div');
-    row.className = 'g-row';
-    const kk = document.createElement('span');
-    kk.textContent = k;
-    const vv = document.createElement('span');
-    vv.textContent = v;
-    row.append(kk, vv);
-    meta.appendChild(row);
+function achievementStats() {
+  let legendary = 0;
+  let orphans = 0;
+  for (const path of game.collected) {
+    const n = game.byPath.get(path);
+    if (!n) continue;
+    if (n._rarity === 'legendaire') legendary++;
+    if (n._orphan) orphans++;
   }
-  root.appendChild(meta);
-
-  const hint = document.createElement('div');
-  hint.className = 'g-hint';
-  hint.textContent = 'une mémoire gagnée sur le donjon.';
-  root.appendChild(hint);
-
-  const open = document.createElement('button');
-  open.className = 'btn btn-gold';
-  open.textContent = 'ouvrir dans Obsidian';
-  open.addEventListener('click', () => openInObsidian(note.path));
-  root.appendChild(open);
-
-  el.modalBody.replaceChildren(root);
-  el.modal.hidden = false;
-  Sfx.sfx.open();
-}
-
-function openLibrary(node) {
-  const lib = game.room && game.room.library;
-  const notes = (lib && lib.notes) || [];
-  el.modalTitle.textContent = 'Bibliothèque — mémoires en rafale';
-  const root = document.createElement('div');
-  root.className = 'list';
-
-  const info = document.createElement('div');
-  info.className = 'list-info';
-  info.textContent = `${notes.length} parchemin(s) empilé(s) dans cette pièce.`;
-  root.appendChild(info);
-
-  const list = document.createElement('div');
-  list.className = 'list-rows';
-  const rows = notes.map(note => {
-    const row = document.createElement('div');
-    row.className = 'list-row';
-    const nm = document.createElement('span');
-    nm.textContent = note.name;
-    const sub = document.createElement('span');
-    sub.className = 'list-sub';
-    sub.textContent = note.path || '';
-    const go = document.createElement('button');
-    go.className = 'btn btn-mini';
-    go.textContent = 'ouvrir';
-    go.addEventListener('click', () => openGrimoire(note));
-    row.append(nm, sub, go);
-    return row;
-  });
-  if (rows.length) list.append(...rows);
-  else root.appendChild(document.createTextNode('aucune mémoire à lire.'));
-  root.appendChild(list);
-
-  el.modalBody.replaceChildren(root);
-  el.modal.hidden = false;
-}
-
-function openRoutes(node, extras) {
-  el.modalTitle.textContent = 'Routes — portes lointaines';
-  const root = document.createElement('div');
-  root.className = 'list';
-
-  const info = document.createElement('div');
-  info.className = 'list-info';
-  info.textContent = 'des couloirs trop nombreux pour le donjon : emprunte l’une de ces routes.';
-  root.appendChild(info);
-
-  const list = document.createElement('div');
-  list.className = 'list-rows';
-  const rows = extras.map(child => {
-    const row = document.createElement('div');
-    row.className = 'list-row';
-    const nm = document.createElement('span');
-    nm.textContent = child.name;
-    const sub = document.createElement('span');
-    sub.className = 'list-sub';
-    sub.textContent = child.path || '';
-    const go = document.createElement('button');
-    go.className = 'btn btn-mini';
-    go.textContent = 'voyager';
-    go.addEventListener('click', () => {
-      closeModal();
-      Sfx.sfx.door();
-      game.goTo(child._key);
-    });
-    row.append(nm, sub, go);
-    return row;
-  });
-  list.append(...rows);
-  root.appendChild(list);
-
-  el.modalBody.replaceChildren(root);
-  el.modal.hidden = false;
-}
-
-function openInObsidian(path) {
-  if (!path) return;
-  const uri = `obsidian://open?path=${encodeURIComponent(path)}`;
-  try {
-    window.location.href = uri;
-  } catch (e) {
-    showToast('impossible d’ouvrir Obsidian');
-  }
-}
-
-function openInventory() {
-  const nodes = [...game.collected]
-    .map(p => game.byPath.get(p))
-    .filter(Boolean)
-    .sort((a, b) => (a.name < b.name ? -1 : 1));
-
-  el.modalTitle.textContent = `Inventaire — ${nodes.length} mémoire(s)`;
-  const root = document.createElement('div');
-  root.className = 'list';
-
-  const info = document.createElement('div');
-  info.className = 'list-info';
-  info.textContent =
-    nodes.length
-      ? 'relis une mémoire pour la rouvrir dans Obsidian.'
-      : 'aucune mémoire trouvée — explore le donjon et lis les parchemins.';
-  root.appendChild(info);
-
-  const list = document.createElement('div');
-  list.className = 'list-rows';
-  for (const note of nodes) {
-    const row = document.createElement('div');
-    row.className = 'list-row';
-    const nm = document.createElement('span');
-    nm.textContent = note.name;
-    const sub = document.createElement('span');
-    sub.className = 'list-sub';
-    sub.textContent = note.path || '';
-    const relire = document.createElement('button');
-    relire.className = 'btn btn-mini';
-    relire.textContent = 'relire';
-    relire.addEventListener('click', () => openGrimoire(note));
-    const ouvrir = document.createElement('button');
-    ouvrir.className = 'btn btn-mini';
-    ouvrir.textContent = 'obsidian';
-    ouvrir.addEventListener('click', () => openInObsidian(note.path));
-    row.append(nm, sub, relire, ouvrir);
-    list.appendChild(row);
-  }
-  if (!nodes.length) root.appendChild(document.createTextNode(''));
-  root.appendChild(list);
-
-  el.modalBody.replaceChildren(root);
-  el.modal.hidden = false;
-  Sfx.sfx.open();
-}
-
-function openSucces() {
-  const unlocked = game.achieved.size;
-  el.modalTitle.textContent = `Succès — ${unlocked}/${ACHIEVEMENTS.length}`;
-  const root = document.createElement('div');
-  root.className = 'list';
-
-  const info = document.createElement('div');
-  info.className = 'list-info';
-  info.textContent = `${unlocked} exploit(s) gravé(s) dans la pierre du donjon.`;
-  root.appendChild(info);
-
-  const grid = document.createElement('div');
-  grid.className = 'ach-grid';
-  for (const a of ACHIEVEMENTS) {
-    const got = game.achieved.has(a.id);
-    const cell = document.createElement('div');
-    cell.className = got ? 'ach-cell on' : 'ach-cell';
-    const ic = document.createElement('div');
-    ic.className = 'ach-icon';
-    ic.textContent = got ? a.icon : '?';
-    const nm = document.createElement('div');
-    nm.className = 'ach-name';
-    nm.textContent = got ? a.name : 'succès inconnu';
-    const de = document.createElement('div');
-    de.className = 'ach-desc';
-    de.textContent = got ? a.desc : 'accomplis encore des exploits…';
-    cell.append(ic, nm, de);
-    grid.appendChild(cell);
-  }
-  root.appendChild(grid);
-
-  el.modalBody.replaceChildren(root);
-  el.modal.hidden = false;
-  Sfx.sfx.open();
-}
-
-function checkAchievements() {
-  const s = {
+  let clearedRooms = 0;
+  for (const [dir, count] of progress.direct) if (dir._direct > 0 && count >= dir._direct) clearedRooms++;
+  let depth = 0;
+  for (const key of game.visited) depth = Math.max(depth, (game.byPath.get(key) || {})._depth || 0);
+  return {
     notes: game.collected.size,
     rooms: game.visited.size,
     level: game.player.level,
     bosses: game.defeatedBosses.size,
     kills: game.stats.kills,
     deaths: game.stats.deaths,
+    links: game.stats.links,
+    relics: Object.values(game.relics).reduce((a, b) => a + b, 0),
+    seals: game.seals,
+    dailies: game.stats.dailies,
+    echoes: game.stats.echoes,
+    chests: game.stats.chests,
+    secrets: game.stats.secrets,
+    unlocks: game.stats.unlocks,
+    perks: perkTotal(game.perks),
+    reflects: game.stats.reflects,
+    dodges: game.stats.dodges,
+    stuns: game.stats.stuns,
     revealed: game.isRoomFullyRevealed(),
+    legendary,
+    orphans,
+    cleared: clearedRooms,
+    depth,
   };
-  for (const a of ACHIEVEMENTS) {
-    if (game.achieved.has(a.id)) continue;
-    if (achievementTest(a.id, s)) {
-      game.achieved.add(a.id);
-      save();
-      showToast(`★ succès débloqué : ${a.name}`);
-      Sfx.sfx.levelUp();
-    }
-  }
-  const n = `${game.achieved.size}/${ACHIEVEMENTS.length}`;
-  if (el.achCount.textContent !== n) el.achCount.textContent = n;
 }
 
+function checkAchievements() {
+  const s = achievementStats();
+  for (const a of ACHIEVEMENTS) {
+    if (game.achieved.has(a.id) || !a.test(s)) continue;
+    game.achieved.add(a.id);
+    showToast(`★ succès débloqué : ${a.name}`);
+    Sfx.sfx.levelUp();
+  }
+  el.achCount.textContent = `${game.achieved.size}/${ACHIEVEMENTS.length}`;
+}
+
+// Appelé seulement quand l'état de progression change (collecte, kill, salle…).
+function onProgressChanged() {
+  refreshProgress();
+  checkAchievements();
+  updateHud();
+  save();
+}
+
+// File de messages : un succès ne doit pas effacer le parchemin qu'on vient de ramasser.
+const toasts = [];
+let toastTimer = 0;
 function showToast(msg) {
+  if (toasts.includes(msg) || (el.toast.textContent === msg && !el.toast.hidden)) return;
+  toasts.push(msg);
+  if (toasts.length > 4) toasts.splice(0, toasts.length - 4);
+  if (!toastTimer) nextToast();
+}
+
+function nextToast() {
+  const msg = toasts.shift();
+  if (!msg) {
+    el.toast.hidden = true;
+    toastTimer = 0;
+    return;
+  }
   el.toast.textContent = msg;
   el.toast.hidden = false;
-  clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => {
-    el.toast.hidden = true;
-  }, 1800);
-}
-
-function closeModal() {
-  if (el.modal.hidden) return;
-  el.modal.hidden = true;
-  Sfx.sfx.close();
+  toastTimer = setTimeout(nextToast, toasts.length ? 1400 : 2000);
 }
 
 function refreshPrompt() {
   const it = game.prompt;
-  if (!it || el.modal.hidden === false) {
+  if (!it || isPaused()) {
     el.prompt.hidden = true;
     return;
   }
   el.prompt.hidden = false;
-  el.prompt.textContent = it.label;
-  const s = game.screenOf(it.x + 0.5, it.y + 0.5);
+  if (el.prompt.textContent !== it.label) el.prompt.textContent = it.label;
+  const s = game.screenOf(it.x + 0.5, it.y);
   el.prompt.style.left = `${(s.x / 320) * 100}%`;
   el.prompt.style.top = `${(s.y / 192) * 100}%`;
 }
 
-function updateMute() {
-  const muted = Sfx.isMuted();
-  document.getElementById('controls').classList.toggle('muted', muted);
-  showToast(muted ? 'son coupé' : 'son activé');
+// ── Fenêtres ────────────────────────────────────────────────────
+
+const rarityLabel = n => (RARITY[n._rarity] || RARITY.commune).label;
+const folderName = n => (n._parent ? n._parent.name : '');
+
+function openInObsidian(path) {
+  if (!path) return;
+  window.location.href = `obsidian://open?path=${encodeURIComponent(path)}`;
 }
+
+function openGrimoire(note) {
+  const root = h('div', 'grimoire');
+  root.appendChild(h('div', `g-name rar-${note._rarity}`, note.name));
+
+  const meta = h('div', 'g-meta');
+  const metaRows = [
+    ['rareté', rarityLabel(note)],
+    ['chemin', note.path || note.id || ''],
+    ['taille', `${Math.max(1, Math.round((note.size || 0) / 1024))} ko`],
+    ['liens', `${note._links.length} sortant(s) · ${note._backlinks.length} entrant(s)`],
+    ['profondeur', `${note._depth}`],
+  ];
+  if (note._orphan) metaRows.push(['statut', 'orpheline — aucun lien']);
+  for (const [k, v] of metaRows) {
+    const r = h('div', 'g-row');
+    r.append(h('span', null, k), h('span', null, v));
+    meta.appendChild(r);
+  }
+  root.appendChild(meta);
+
+  const linked = [
+    ...note._links.map(n => ['>', n]),
+    ...note._backlinks.filter(n => !note._links.includes(n)).map(n => ['<', n]),
+  ];
+  if (linked.length) {
+    root.appendChild(h('div', 'g-hint', 'fils de mémoire — suis-les pour te téléporter :'));
+    root.appendChild(list(linked.map(([dir, n]) => row({
+      name: `${dir} ${game.collected.has(n.path) ? '✦ ' : ''}${n.name}`,
+      sub: folderName(n),
+      cls: `rar-${n._rarity}`,
+      actions: [{
+        label: 'suivre',
+        onClick: () => {
+          modal.close();
+          game.followLink(n);
+        },
+      }],
+    }))));
+  } else {
+    root.appendChild(h('div', 'g-hint', 'une mémoire gagnée sur le donjon.'));
+  }
+
+  const actions = h('div', 'g-actions');
+  actions.append(
+    button('ouvrir dans Obsidian (O)', () => openInObsidian(note.path), 'btn btn-gold'),
+    button('fermer (E)', () => modal.close(), 'btn btn-ghost'),
+  );
+  root.appendChild(actions);
+
+  modal.open('grimoire', 'Grimoire — parchemin', root);
+  grimoireNote = note;
+  Sfx.sfx.open();
+}
+
+function openLibrary(notes) {
+  libraryNotes = notes;
+  const root = h('div', 'list');
+  const left = notes.filter(n => !game.collected.has(n.path)).length;
+  root.appendChild(h('div', 'list-info', `${left}/${notes.length} parchemin(s) encore à prendre. Prendre un parchemin le collecte.`));
+  root.appendChild(list(notes.map(note => {
+    const got = game.collected.has(note.path);
+    return row({
+      name: `${got ? '✦ ' : ''}${note.name}`,
+      sub: rarityLabel(note),
+      cls: `rar-${note._rarity}`,
+      actions: got
+        ? [{ label: 'relire', onClick: () => openGrimoire(note) }]
+        : [{ label: 'prendre', onClick: () => game.collectNote(note) }],
+    });
+  }), 'aucune mémoire à lire.'));
+  modal.open('library', 'Bibliothèque — mémoires en rafale', root);
+}
+
+function openRoutes(extras) {
+  const root = h('div', 'list');
+  root.appendChild(h('div', 'list-info', 'des couloirs trop nombreux pour le donjon : emprunte l’une de ces routes.'));
+  root.appendChild(list(extras.map(child => row({
+    name: child.name,
+    sub: `${pct(progress.total.get(child) || 0, child._total)} %`,
+    actions: [{
+      label: 'voyager',
+      onClick: () => {
+        modal.close();
+        Sfx.sfx.door();
+        game.goTo(child._key);
+      },
+    }],
+  }))));
+  modal.open('routes', 'Routes — portes lointaines', root);
+}
+
+function openInventory() {
+  const nodes = [...game.collected]
+    .map(p => game.byPath.get(p))
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const root = h('div', 'list');
+  root.appendChild(relicsPanel());
+  root.appendChild(h('div', 'list-info', nodes.length
+    ? 'relis une mémoire ou rouvre-la dans Obsidian.'
+    : 'aucune mémoire trouvée — explore le donjon et lis les parchemins.'));
+  const filter = h('input', 'field');
+  filter.placeholder = 'filtrer…';
+  filter.setAttribute('aria-label', 'filtrer l’inventaire');
+  root.appendChild(filter);
+  const box = h('div');
+  const draw = () => {
+    const q = filter.value.trim().toLowerCase();
+    const shown = q ? nodes.filter(n => n.name.toLowerCase().includes(q)) : nodes;
+    box.replaceChildren(list(shown.map(note => row({
+      name: note.name,
+      sub: `${rarityLabel(note)} · ${folderName(note)}`,
+      cls: `rar-${note._rarity}`,
+      actions: [
+        { label: 'relire', onClick: () => openGrimoire(note) },
+        { label: 'obsidian', onClick: () => openInObsidian(note.path) },
+      ],
+    })), q ? 'aucun résultat.' : ''));
+  };
+  filter.addEventListener('input', draw);
+  draw();
+  root.appendChild(box);
+  modal.open('inventory', `Inventaire — ${nodes.length} mémoire(s)`, root, { focus: nodes.length ? filter : null });
+  Sfx.sfx.open();
+}
+
+function relicsPanel() {
+  const box = h('div', 'relics');
+  const owned = RELICS.filter(r => game.relic(r.id));
+  box.appendChild(h('div', 'relics-title', `reliques ${owned.length}/${RELICS.length} · sceaux ${game.seals} (+${Math.round(game.sealXpBonus() * 100)} % XP, +${game.sealHearts()} ♥)`));
+  const grid = h('div', 'relic-grid');
+  for (const r of RELICS) {
+    const n = game.relic(r.id);
+    const cell = h('div', n ? 'relic on' : 'relic', n ? r.icon : '?');
+    cell.title = n ? `${r.name}${n > 1 ? ` ×${n}` : ''} — ${r.desc}` : 'relique inconnue — cachée dans une note légendaire';
+    if (n > 1) cell.appendChild(h('span', 'relic-n', `${n}`));
+    grid.appendChild(cell);
+  }
+  box.appendChild(grid);
+  if (!owned.length) box.appendChild(h('div', 'list-sub', 'les notes légendaires (violettes) renferment des reliques.'));
+  return box;
+}
+
+function openSucces() {
+  const unlocked = game.achieved.size;
+  const root = h('div', 'list');
+  root.appendChild(h('div', 'list-info', `${unlocked} exploit(s) gravé(s) dans la pierre du donjon.`));
+  const grid = h('div', 'ach-grid');
+  for (const a of ACHIEVEMENTS) {
+    const got = game.achieved.has(a.id);
+    const cell = h('div', got ? 'ach-cell on' : 'ach-cell');
+    cell.append(
+      h('div', 'ach-icon', got ? a.icon : '?'),
+      h('div', 'ach-name', got ? a.name : 'succès inconnu'),
+      h('div', 'ach-desc', got ? a.desc : 'accomplis encore des exploits…'),
+    );
+    grid.appendChild(cell);
+  }
+  root.appendChild(grid);
+  modal.open('succes', `Succès — ${unlocked}/${ACHIEVEMENTS.length}`, root);
+  Sfx.sfx.open();
+}
+
+function openMap() {
+  const root = h('div', 'list');
+  root.appendChild(h('div', 'list-info', `les salles déjà visitées sont accessibles en voyage rapide. ✓ = dossier complété (sceaux : ${game.seals}).`));
+  const rows = [];
+  const walk = (dir) => {
+    const done = progress.total.get(dir) || 0;
+    const visited = game.visited.has(dir._key);
+    const here = game.room.node === dir;
+    const actions = visited && !here
+      ? [{
+        label: 'voyager',
+        onClick: () => {
+          modal.close();
+          Sfx.sfx.warp();
+          game.goTo(dir._key);
+        },
+      }]
+      : [];
+    rows.push(row({
+      name: `${here ? '◆ ' : cleared.has(dir._key) ? '✓ ' : ''}${visited ? dir.name : `${dir.name} (inexploré)`}`,
+      sub: `${done}/${dir._total} · ${pct(done, dir._total)}%`,
+      cls: visited ? (here ? 'map-here' : '') : 'map-unknown',
+      indent: dir._depth,
+      actions,
+    }));
+    for (const c of dir.children) if (c.type !== 'MARKDOWN_FILE') walk(c);
+  };
+  walk(game.world.root);
+  root.appendChild(list(rows));
+
+  const foot = h('div', 'g-actions');
+  foot.append(
+    button(`mode : ${game.mode} > ${otherMode()} (G)`, () => {
+      toggleMode();
+      openMap();
+    }, 'btn btn-ghost'),
+    button('nouvelle partie', newGame, 'btn btn-danger'),
+  );
+  root.appendChild(foot);
+  modal.open('map', 'Carte du vault', root);
+  Sfx.sfx.open();
+}
+
+function dailyPanel() {
+  const d = game.daily;
+  const box = h('div', 'daily');
+  if (!d) return box;
+  box.appendChild(h('div', 'relics-title', `notes du jour ${d.done.size}/${d.targets.length}${d.rewarded ? ' — terminé ✓' : ' — un don à la clé'}`));
+  box.appendChild(list(d.targets.map(path => game.byPath.get(path)).filter(Boolean).map(note => {
+    const done = d.done.has(note.path);
+    const known = game.collected.has(note.path);
+    return row({
+      name: `${done ? '✓ ' : ''}${note.name}`,
+      sub: `${known ? 'à relire' : 'à découvrir'} · ${folderName(note)}`,
+      cls: done ? 'map-unknown' : 'daily-row',
+      actions: done ? [] : [{
+        label: 'guider',
+        onClick: () => {
+          game.setQuest(note);
+          modal.close();
+          showToast(`quête : ${known ? 'relire' : 'trouver'} « ${note.name} »`);
+        },
+      }],
+    });
+  })));
+  return box;
+}
+
+function openSearch() {
+  const root = h('div', 'list');
+  root.appendChild(dailyPanel());
+  if (game.quest) {
+    const info = h('div', 'quest-info');
+    info.append(
+      h('span', null, `quête en cours : ${game.quest.name}`),
+      button('abandonner', () => {
+        game.setQuest(null);
+        openSearch();
+      }),
+    );
+    root.appendChild(info);
+  }
+  const input = h('input', 'field');
+  input.placeholder = 'nom d’une note…';
+  input.setAttribute('aria-label', 'chercher une note');
+  root.appendChild(input);
+  const box = h('div');
+  const draw = () => {
+    const found = searchNotes(game.world.notes, input.value);
+    box.replaceChildren(list(found.map(note => {
+      const got = game.collected.has(note.path);
+      return row({
+        name: `${got ? '✦ ' : ''}${note.name}`,
+        sub: folderName(note),
+        cls: `rar-${note._rarity}`,
+        actions: got
+          ? [{ label: 'relire', onClick: () => openGrimoire(note) }]
+          : [{
+            label: 'guider',
+            onClick: () => {
+              game.setQuest(note);
+              modal.close();
+              showToast(`quête : trouver « ${note.name} »`);
+            },
+          }],
+      });
+    }), input.value.trim() ? 'aucune note ne correspond.' : 'tape quelques lettres.'));
+  };
+  input.addEventListener('input', draw);
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const first = box.querySelector('.list-row button');
+    if (first) first.click();
+  });
+  draw();
+  root.appendChild(box);
+  modal.open('search', 'Chercher une mémoire', root, { focus: input });
+}
+
+// Les dons tirés restent les mêmes tant qu'on n'a pas choisi (pas de relance en fermant).
+let perkChoices = null;
+function openPerks() {
+  if (!perkChoices) perkChoices = rollPerks(game.perks, 3);
+  if (!perkChoices.length) {
+    game.pendingPerks = 0;
+    perkChoices = null;
+    return;
+  }
+  const root = h('div', 'perks');
+  const more = game.pendingPerks > 1 ? `${game.pendingPerks} dons à choisir. ` : '';
+  root.appendChild(h('div', 'list-info', `${more}choisis un don — touches 1, 2, 3 ou clic.`));
+  const grid = h('div', 'perk-grid');
+  perkChoices.forEach((pk, i) => {
+    const card = button('', () => pickPerk(pk.id), 'perk-card');
+    card.append(
+      h('div', 'perk-key', `${i + 1}`),
+      h('div', 'perk-icon', pk.icon),
+      h('div', 'perk-name', pk.name),
+      h('div', 'perk-desc', pk.desc),
+      h('div', 'perk-lvl', `niv. ${game.perk(pk.id) + 1} / ${pk.max}`),
+    );
+    grid.appendChild(card);
+  });
+  root.appendChild(grid);
+  modal.open('perks', `Niveau ${game.player.level} — choisis un don`, root, { focus: grid.firstChild, locked: true });
+  Sfx.sfx.open();
+}
+
+function pickPerk(id) {
+  game.choosePerk(id);
+  perkChoices = null;
+  modal.close(true);
+  showToast(`don obtenu : ${PERK_BY_ID[id].name}`);
+}
+
+const PANELS = { KeyI: ['inventory', openInventory], KeyK: ['succes', openSucces], KeyT: ['map', openMap], KeyF: ['search', openSearch] };
+
+function togglePanel(code) {
+  const [kind, open] = PANELS[code];
+  if (modal.isOpen && modal.kind === kind) modal.close();
+  else open();
+}
+
+function otherMode() {
+  return game.mode === DUNGEON ? CLASSIC : DUNGEON;
+}
+
+function toggleMode() {
+  const m = otherMode();
+  game.setMode(m);
+  prog.saveMode(m);
+  showToast(m === DUNGEON ? 'mode donjon — étages de chambres et couloirs' : 'mode salle — une pièce par dossier');
+}
+
+function newGame() {
+  if (!window.confirm('Effacer la progression de ce vault et recommencer ?')) return;
+  modal.close();
+  if (store) store.clear();
+  game.newGame();
+  showToast('nouvelle partie');
+}
+
+// ── Entrées ─────────────────────────────────────────────────────
+
+let hintTimer = 0;
+function checkHint() {
+  if (!el.hint.hidden) return;
+  const hint = nextHint(game);
+  if (!hint) return;
+  game.hints.add(hint.id);
+  el.hint.textContent = hint.text;
+  el.hint.hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => {
+    el.hint.hidden = true;
+  }, 6000);
+  save();
+}
+
+function isPaused() {
+  return modal.isOpen || !el.death.hidden || !el.boot.hidden;
+}
+
+const ACTION_CODES = new Set(['ShiftLeft', 'ShiftRight', 'KeyE', 'Enter', 'Space', 'KeyJ', 'Tab', 'KeyM', 'KeyN', 'KeyG', 'KeyI', 'KeyK', 'KeyT', 'KeyF', 'Slash']);
+
+window.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  Sfx.ensureContext();
+
+  if (modal.isOpen && modal.kind === 'perks') {
+    if (e.code === 'Tab') return modal.trapTab(e);
+    const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code];
+    if (n !== undefined && perkChoices && perkChoices[n] && !e.repeat) pickPerk(perkChoices[n].id);
+    return;
+  }
+
+  if (modal.isOpen) {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      modal.close();
+      return;
+    }
+    if (e.target instanceof HTMLInputElement) return;
+    if (e.code === 'Tab') return modal.trapTab(e);
+    if (e.repeat) return;
+    if (e.code === 'KeyE') return modal.close();
+    if (e.code === 'KeyO' && grimoireNote) return openInObsidian(grimoireNote.path);
+    if (e.code === 'KeyG' && modal.kind === 'map') {
+      toggleMode();
+      return openMap();
+    }
+    if (PANELS[e.code]) {
+      e.preventDefault();
+      togglePanel(e.code);
+    }
+    return;
+  }
+  if (!el.death.hidden || !el.boot.hidden) return;
+
+  // Empêche aussi la touche d'ouverture d'un panneau d'être tapée dans son champ de saisie.
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Enter', 'Tab', 'Slash'].includes(e.code) || PANELS[e.code] || e.key === '/') {
+    e.preventDefault();
+  }
+  if (e.repeat && ACTION_CODES.has(e.code)) return;
+  keys.add(e.code);
+
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') game.dodge(keys);
+  else if (e.code === 'KeyE' || e.code === 'Enter') game.interact();
+  else if (e.code === 'Space' || e.code === 'KeyJ') game.attack();
+  else if (e.code === 'Tab') {
+    if (game.room && game.room.sign) {
+      Sfx.sfx.open();
+      openRoutes(game.room.sign.extras);
+    } else {
+      Sfx.sfx.error();
+      showToast('aucune route à l’horizon');
+    }
+  } else if (e.code === 'KeyM') {
+    Sfx.setMuted(!Sfx.isMuted());
+    el.controls.classList.toggle('muted', Sfx.isMuted());
+    showToast(Sfx.isMuted() ? 'son coupé' : 'son activé');
+  } else if (e.code === 'KeyN') {
+    Music.setEnabled(!Music.isEnabled());
+    try {
+      localStorage.setItem(MUSIC_KEY, Music.isEnabled() ? 'on' : 'off');
+    } catch {
+      // préférence non mémorisée
+    }
+    showToast(Music.isEnabled() ? 'musique activée' : 'musique coupée');
+  } else if (e.code === 'KeyG') toggleMode();
+  else if (e.code === 'Slash' || e.key === '/') togglePanel('KeyF');
+  else if (PANELS[e.code]) togglePanel(e.code);
+});
+
+window.addEventListener('keyup', e => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => {
+  keys.clear();
+  if (document.hidden) save();
+});
+window.addEventListener('beforeunload', save);
 
 canvas.addEventListener('pointerdown', () => {
   Sfx.ensureContext();
   game.interact();
 });
 
-window.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  Sfx.ensureContext();
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'Tab'].includes(e.key)) e.preventDefault();
-  keys.add(e.code);
-
-  if (e.code === 'KeyE' || e.code === 'Enter') {
-    if (el.modal.hidden === false) dismissOrDefault();
-    else game.interact();
-  }
-  if (e.code === 'Space' || e.code === 'KeyJ') {
-    if (el.modal.hidden === false) dismissOrDefault();
-    else game.attack();
-  }
-  if (e.code === 'Tab') {
-    if (el.modal.hidden === false) closeModal();
-    else if (game.room && game.room.sign) {
-      Sfx.sfx.open();
-      openRoutes(game.room.node, game.room.sign.extras);
-    } else {
-      Sfx.sfx.error();
-      showToast('aucune route à l’horizon');
-    }
-  }
-  if (e.code === 'KeyM') {
-    Sfx.setMuted(!Sfx.isMuted());
-    updateMute();
-  }
-  if (e.code === 'KeyI') {
-    if (el.modal.hidden === false) closeModal();
-    openInventory();
-  }
-  if (e.code === 'KeyK') {
-    if (el.modal.hidden === false) closeModal();
-    openSucces();
-  }
-  if (e.code === 'Escape' && el.modal.hidden === false) closeModal();
+el.deathRetry.addEventListener('click', () => {
+  el.death.hidden = true;
+  game.respawn();
+  canvas.focus({ preventScroll: true });
 });
 
-function dismissOrDefault() {
-  const btn = el.modalBody.querySelector('.btn-gold');
-  if (btn) btn.click();
-  else closeModal();
+const hudButton = (id, fn) => $(id).addEventListener('click', e => {
+  e.currentTarget.blur();
+  Sfx.ensureContext();
+  fn();
+});
+hudButton('btn-inv', () => togglePanel('KeyI'));
+hudButton('btn-ach', () => togglePanel('KeyK'));
+hudButton('btn-map', () => togglePanel('KeyT'));
+hudButton('btn-search', () => togglePanel('KeyF'));
+hudButton('btn-mode', toggleMode);
+
+if (setupTouch($('touch'), keys, { attack: () => game.attack(), interact: () => game.interact(), dodge: () => game.dodge(keys) })) {
+  el.controls.hidden = true;
 }
 
-window.addEventListener('keyup', e => keys.delete(e.code));
+// ── Démarrage ───────────────────────────────────────────────────
 
+let booting = false;
 async function boot(kind = 'real') {
-  if (boot._busy) return;
-  boot._busy = true;
+  if (booting) return;
+  booting = true;
   el.boot.hidden = false;
   el.bootMsg.textContent = 'ouverture du donjon…';
   el.bootActions.hidden = true;
   try {
-    const data = kind === 'demo' ? buildDemoWorld() : await fetchUniverse();
+    const demo = kind === 'demo';
+    const data = demo ? buildDemoWorld() : await fetchUniverse();
     const world = buildWorld(data);
     game.setWorld(world);
-    const p = prog.loadProgress();
-    if (p && kind !== 'demo') game.restore(p);
-    else game.goTo(world.root._key);
+    game.resetProgress();
+    game.mode = prog.loadMode(DUNGEON);
+    store = demo ? null : prog.storeFor(prog.vaultIdOf(data));
+    const saved = store && store.load();
+    if (saved) game.restore(saved);
+    else game.newGame();
     el.boot.hidden = true;
-    if (kind === 'demo') showToast('mode démo — données fictives');
+    canvas.focus({ preventScroll: true });
+    if (demo) showToast('mode démo — données fictives, rien n’est sauvegardé');
   } catch (err) {
     console.error(err);
     el.bootMsg.textContent =
       'donjon verrouillé — API inaccessible.\nLance obsidian-back (./mvnw spring-boot:run), puis réessaie.';
     el.bootActions.hidden = false;
   } finally {
-    boot._busy = false;
+    booting = false;
   }
 }
 
-el.bootRetry.addEventListener('click', () => boot('real'));
-el.bootDemo.addEventListener('click', () => boot('demo'));
-el.btnInv.addEventListener('click', () => {
-  el.modal.hidden === false ? closeModal() : openInventory();
-});
-el.btnAch.addEventListener('click', () => {
-  el.modal.hidden === false ? closeModal() : openSucces();
-});
+$('boot-retry').addEventListener('click', () => boot('real'));
+$('boot-demo').addEventListener('click', () => boot('demo'));
 
-window.__obsidianQuest = { game };
+window.__obsidianQuest = { game, sfx: Sfx, music: Music };
 
 let prev = performance.now();
 let frame = 0;
@@ -507,13 +809,20 @@ function loop(now) {
   prev = now;
   frame++;
 
+  game.paused = isPaused();
   game.tick(keys, dt);
-  game.render();
+  const b = game.room && game.room.boss;
+  Music.setIntensity(b && !b.dead && b.hunting && !game.dead ? 1 : 0);
+  if (game.dirty && game.room) {
+    game.dirty = false;
+    onProgressChanged();
+  }
+  if (game.pendingPerks > 0 && game.room && !game.dead && !isPaused()) openPerks();
+  if (frame % 20 === 0 && game.room && !isPaused() && !game.dead) checkHint();
+  renderer.render(game, cleared);
   refreshPrompt();
-  updateVitals();
-  checkAchievements();
-
-  if (frame % 60 === 0) save();
+  if (game.room) updateVitals();
+  if (frame % 120 === 0) save();
 
   requestAnimationFrame(loop);
 }

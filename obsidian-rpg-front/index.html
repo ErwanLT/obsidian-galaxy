@@ -2,7 +2,7 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Obsidian Quest</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,32 +12,37 @@
   <body>
     <div id="stage">
       <div class="screen">
-        <canvas id="game" width="320" height="192"></canvas>
+        <canvas id="game" width="320" height="192" tabindex="-1" aria-label="donjon"></canvas>
         <div id="scanlines"></div>
 
-<div id="hud">
+        <div id="hud">
           <div id="brand">
             <div class="brand-title">OBSIDIAN QUEST</div>
             <div id="room-name" class="brand-room">—</div>
             <div id="room-path" class="brand-path">—</div>
+            <div id="quest" class="brand-quest" hidden></div>
           </div>
 
           <div id="hud-actions">
-            <button id="btn-inv" class="hud-btn">✦ inventaire</button>
-            <button id="btn-ach" class="hud-btn">★ succès <b id="ach-count">0/13</b></button>
+            <button id="btn-mode" class="hud-btn" type="button" title="changer de mode (G)">⌂ <b id="mode-label">donjon</b></button>
+            <button id="btn-map" class="hud-btn" type="button" title="carte du vault (T)">▦ carte</button>
+            <button id="btn-search" class="hud-btn" type="button" title="chercher une note (F)">⌕ chercher</button>
+            <button id="btn-inv" class="hud-btn" type="button" title="inventaire (I)">✦ inventaire</button>
+            <button id="btn-ach" class="hud-btn" type="button" title="succès (K)">★ <b id="ach-count">0/0</b></button>
           </div>
 
           <div id="stats">
-            <span title="parchemins collectés">✦ <b id="st-col">0</b></span>
-            <span title="pièces visitées">◈ <b id="st-rooms">0</b></span>
-            <span title="mémoires de la pièce">☗ <b id="st-inroom">0</b></span>
+            <span title="parchemins collectés / total du vault">✦ <b id="st-col">0</b></span>
+            <span title="salles visitées">◈ <b id="st-rooms">0</b></span>
+            <span title="parchemins de cette salle">☗ <b id="st-inroom">0</b></span>
+            <span id="st-key" class="st-key" title="clé de la voûte" hidden>⚷ <b>clé</b></span>
           </div>
         </div>
 
         <div id="crumb"></div>
 
         <div id="vitals">
-          <div id="hearts" class="hearts"></div>
+          <div id="hearts" class="hearts" aria-label="points de vie"></div>
           <div id="xp" class="xplabel">Lv 1 · 0 XP</div>
         </div>
 
@@ -49,29 +54,44 @@
         <canvas id="minimap" width="24" height="16"></canvas>
 
         <div id="prompt" hidden></div>
-        <div id="toast" hidden></div>
+        <div id="toast" hidden role="status" aria-live="polite"></div>
+        <div id="hint" hidden role="status" aria-live="polite"></div>
 
         <div id="controls">
-          wasd / zqsd — se déplacer<br />
-          ESPACE — épée &nbsp;·&nbsp; E — lire / entrer<br />
-          I — inventaire &nbsp;·&nbsp; K — succès &nbsp;·&nbsp; TAB — routes &nbsp;·&nbsp; M — son
+          wasd / zqsd — se déplacer · ESPACE — épée · SHIFT — esquive · E — lire / entrer<br />
+          F — chercher · T — carte · I — inventaire · K — succès<br />
+          TAB — routes · G — mode salle/donjon · M — son · N — musique
+        </div>
+      </div>
+
+      <div id="touch" hidden>
+        <div class="dpad">
+          <button type="button" class="pad up" data-code="ArrowUp" aria-label="haut">▲</button>
+          <button type="button" class="pad left" data-code="ArrowLeft" aria-label="gauche">◀</button>
+          <button type="button" class="pad right" data-code="ArrowRight" aria-label="droite">▶</button>
+          <button type="button" class="pad down" data-code="ArrowDown" aria-label="bas">▼</button>
+        </div>
+        <div class="acts">
+          <button type="button" class="act" data-act="interact" aria-label="interagir">E</button>
+          <button type="button" class="act act-sword" data-act="attack" aria-label="épée">⚔</button>
+          <button type="button" class="act act-dodge" data-act="dodge" aria-label="esquive">≋</button>
         </div>
       </div>
     </div>
 
-    <div id="death" class="modal" hidden>
+    <div id="death" class="modal" hidden role="alertdialog" aria-modal="true" aria-labelledby="death-title">
       <div class="window">
-        <div class="death-title">PERDU</div>
-        <div class="death-msg">le donjon t'a ramené aux portes de la salle.</div>
-        <button id="death-retry" class="btn btn-gold">reprendre</button>
+        <div class="death-title" id="death-title">PERDU</div>
+        <div class="death-msg" id="death-msg">le donjon t'a ramené aux portes de la salle.</div>
+        <button id="death-retry" class="btn btn-gold" type="button">reprendre</button>
       </div>
     </div>
 
-    <div id="modal" class="modal" hidden>
+    <div id="modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="window">
         <div class="win-bar">
           <span id="modal-title">Grimoire</span>
-          <button id="modal-close" title="fermer (Échap)">✕</button>
+          <button id="modal-close" type="button" title="fermer (Échap)" aria-label="fermer">✕</button>
         </div>
         <div id="modal-body"></div>
       </div>
@@ -81,8 +101,8 @@
       <div class="boot-title">OBSIDIAN QUEST</div>
       <div id="boot-msg" class="boot-msg">ouverture du donjon…</div>
       <div id="boot-actions" class="boot-actions" hidden>
-        <button id="boot-retry" class="btn btn-gold">réessayer</button>
-        <button id="boot-demo" class="btn btn-ghost">mode démo</button>
+        <button id="boot-retry" class="btn btn-gold" type="button">réessayer</button>
+        <button id="boot-demo" class="btn btn-ghost" type="button">mode démo</button>
       </div>
     </div>
 

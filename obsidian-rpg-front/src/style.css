@@ -54,6 +54,10 @@ body {
   background: var(--ink);
 }
 
+canvas#game:focus {
+  outline: none;
+}
+
 canvas#game {
   display: block;
   width: 100%;
@@ -152,8 +156,10 @@ canvas#game {
 #hud-actions {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   pointer-events: auto;
 }
 
@@ -281,8 +287,8 @@ canvas#game {
   position: absolute;
   right: 14px;
   bottom: 44px;
-  width: 90px;
-  height: 60px;
+  width: 110px;
+  height: auto;
   border: 3px solid #2a2d3a;
   outline: 2px solid #07080c;
   image-rendering: pixelated;
@@ -499,7 +505,7 @@ canvas#game {
   border: 1px solid var(--line);
 }
 
-.list-row > span:first-child {
+.list-name {
   font-size: 7px;
   color: var(--text);
   flex: 0 1 auto;
@@ -643,4 +649,358 @@ canvas#game {
 #death .btn {
   width: auto;
   padding: 12px 20px;
+}
+/* ── Quête, progression, raretés ───────────────────────────── */
+
+.brand-quest {
+  margin-top: 6px;
+  font-size: 6px;
+  color: var(--cyan);
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 1px 1px 0 #000;
+  animation: blink 1.4s steps(2, start) infinite;
+}
+
+.crumb-done {
+  border-color: rgba(125, 255, 106, 0.55);
+}
+
+.rar-rare .list-name,
+.g-name.rar-rare {
+  color: #9fe0ff;
+}
+
+.rar-legendaire .list-name,
+.grimoire .g-name.rar-legendaire {
+  color: var(--violet);
+  text-shadow: 0 0 8px rgba(199, 123, 255, 0.55);
+}
+
+.grimoire .list-rows {
+  max-height: 22vh;
+  margin-bottom: 10px;
+}
+
+.g-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.g-actions .btn {
+  flex: 1 1 0;
+  width: auto;
+}
+
+.btn-danger {
+  color: #fff;
+  background: #6a1e2a;
+  border-color: #07080c;
+}
+
+.btn-danger:hover {
+  background: #8a2636;
+}
+
+.btn:focus-visible,
+.hud-btn:focus-visible,
+.field:focus-visible,
+#modal-close:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.field {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 8px;
+  font: inherit;
+  font-size: 8px;
+  color: var(--text);
+  background: var(--ink);
+  border: 2px solid var(--line);
+}
+
+.list-empty {
+  font-size: 7px;
+  color: var(--text-lo);
+  padding: 6px 2px;
+}
+
+.map-here .list-name {
+  color: var(--gold);
+}
+
+.map-unknown .list-name {
+  color: var(--text-lo);
+}
+
+.quest-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 7px;
+  color: var(--cyan);
+}
+
+/* ── Contrôles tactiles ─────────────────────────────────────── */
+
+#touch {
+  position: fixed;
+  inset: auto 0 0 0;
+  height: 0;
+  z-index: 5;
+}
+
+.dpad {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: 120px;
+  height: 120px;
+}
+
+.pad,
+.act {
+  position: absolute;
+  font: inherit;
+  color: var(--text);
+  background: rgba(16, 18, 26, 0.7);
+  border: 2px solid var(--line);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pad {
+  width: 40px;
+  height: 40px;
+  font-size: 10px;
+}
+
+.pad.up { left: 40px; top: 0; }
+.pad.down { left: 40px; bottom: 0; }
+.pad.left { left: 0; top: 40px; }
+.pad.right { right: 0; top: 40px; }
+
+.acts {
+  position: absolute;
+  right: 12px;
+  bottom: 120px;
+  width: 112px;
+  height: 64px;
+}
+
+.act {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-size: 12px;
+}
+
+.act[data-act="interact"] { left: 0; bottom: 0; color: var(--gold); }
+.act-sword { right: 0; top: 0; color: var(--red); }
+.act-dodge { left: -6px; top: -58px; width: 44px; height: 44px; font-size: 10px; color: var(--cyan); }
+
+.pad:active,
+.act:active {
+  border-color: var(--cyan);
+  background: rgba(74, 255, 216, 0.18);
+}
+
+@media (orientation: portrait) {
+  body.touch #stage {
+    align-items: flex-start;
+    padding-top: 12px;
+  }
+
+  body.touch .acts {
+    bottom: 40px;
+  }
+}
+
+@media (max-width: 700px) {
+  .hud-btn {
+    padding: 5px 6px;
+  }
+
+  #stats,
+  .brand-path,
+  #controls {
+    display: none;
+  }
+
+  #minimap {
+    width: 64px;
+    right: 8px;
+    bottom: 40px;
+  }
+
+  #vitals {
+    bottom: 6px;
+    padding: 4px 8px;
+  }
+}
+
+/* ── Dons ───────────────────────────────────────────────────── */
+
+.perk-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.perk-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px 10px;
+  font: inherit;
+  color: var(--text);
+  text-align: center;
+  background: var(--panel-2);
+  border: 2px solid var(--line);
+  box-shadow: 0 4px 0 #07080c;
+  cursor: pointer;
+}
+
+.perk-card:hover,
+.perk-card:focus-visible {
+  border-color: var(--gold);
+  outline: none;
+  background: linear-gradient(180deg, rgba(255, 210, 63, 0.14), rgba(255, 210, 63, 0.03));
+}
+
+.perk-key {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  font-size: 6px;
+  color: var(--text-lo);
+}
+
+.perk-icon {
+  font-size: 16px;
+  color: var(--gold);
+}
+
+.perk-name {
+  font-size: 7px;
+  color: var(--gold-hot);
+  line-height: 1.5;
+}
+
+.perk-desc {
+  font-size: 6px;
+  color: var(--text-lo);
+  line-height: 1.7;
+}
+
+.perk-lvl {
+  margin-top: auto;
+  font-size: 6px;
+  color: var(--cyan);
+}
+
+#stats .st-key b {
+  color: var(--gold);
+}
+
+@media (max-width: 520px) {
+  .perk-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Reliques, notes du jour, astuces ───────────────────────── */
+
+.relics,
+.daily {
+  margin-bottom: 12px;
+}
+
+.relics-title {
+  font-size: 7px;
+  color: var(--violet);
+  margin-bottom: 8px;
+}
+
+.daily .relics-title {
+  color: var(--cyan);
+}
+
+.relic-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+}
+
+.relic {
+  position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-lo);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.relic.on {
+  color: var(--violet);
+  border-color: rgba(199, 123, 255, 0.6);
+  text-shadow: 0 0 6px rgba(199, 123, 255, 0.6);
+}
+
+.relic-n {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 5px;
+  color: var(--gold);
+}
+
+.daily-row .list-name {
+  color: var(--cyan);
+}
+
+#hint {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  max-width: 80%;
+  font-size: 7px;
+  line-height: 1.7;
+  text-align: center;
+  color: #0b0d12;
+  background: var(--cyan);
+  border: 2px solid #0b0d12;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5);
+  padding: 6px 10px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.death-msg {
+  white-space: pre-line;
+}
+
+/* La police pixel n'a pas ces symboles : on garde un rendu net avec une police système. */
+.relic,
+.perk-icon,
+.ach-cell .ach-icon {
+  font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", system-ui, sans-serif;
+}
+
+.relic {
+  font-size: 13px;
 }

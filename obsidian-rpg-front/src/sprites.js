@@ -25,6 +25,21 @@ const THEMES = [
   { name: 'cosmos',    floor: '#2a2a54', floor2: '#242448', wall: '#12122e', wall2: '#0c0c24', door: '#4affd8',  accent: '#86ffe8', fol: '#3a3a74', rock: '#4a4884', glow: '#86ffe8' },
 ];
 
+function monsterSet(base, eliteColor) {
+  return { base, elite: tint(base, eliteColor, 0.5), white: tint(base, '#ffffff', 1) };
+}
+
+function tint(src, color, alpha) {
+  const c = mk(src.width, src.height);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
 export function getTheme(key) {
   return THEMES[hashStr(key) % THEMES.length];
 }
@@ -76,12 +91,18 @@ export function makeThemeSprites(theme) {
   rect(gbctx, 4, 2, 1, 3, '#14141c');
   rect(gbctx, 3, 4, 2, 1, '#14141c');
 
-  const noteC = mk(8, 8);
-  const nctx = noteC.getContext('2d');
-  rect(nctx, 1, 2, 6, 5, '#5a3410');
-  rect(nctx, 0, 1, 8, 2, '#c48a2a');
-  rect(nctx, 2, 2, 4, 1, '#ffe08a');
-  rect(nctx, 3, 1, 2, 1, '#ffe08a');
+  const scroll = (body, roll, seal) => {
+    const c = mk(8, 8);
+    const nctx = c.getContext('2d');
+    rect(nctx, 1, 2, 6, 5, body);
+    rect(nctx, 0, 1, 8, 2, roll);
+    rect(nctx, 2, 2, 4, 1, seal);
+    rect(nctx, 3, 1, 2, 1, seal);
+    return c;
+  };
+  const noteC = scroll('#5a3410', '#c48a2a', '#ffe08a');
+  const noteRareC = scroll('#1e3a5a', '#3a8ad8', '#9fe0ff');
+  const noteLegendC = scroll('#3a1a5a', '#b04ae8', '#ffe08a');
 
   const libraryC = mk(8, 8);
   const lctx = libraryC.getContext('2d');
@@ -208,12 +229,98 @@ export function makeThemeSprites(theme) {
   actx.fillRect(1, 4, 6, 1);
   actx.fillRect(3, 5, 2, 2);
 
+  const archerC = mk(8, 8);
+  const arctx = archerC.getContext('2d');
+  rect(arctx, 2, 1, 4, 3, '#3a3550');
+  rect(arctx, 3, 2, 2, 2, '#d8d4c8');
+  rect(arctx, 3, 3, 1, 1, '#ff4a8a');
+  rect(arctx, 1, 4, 5, 3, '#4a4466');
+  rect(arctx, 2, 7, 1, 1, '#2a2638');
+  rect(arctx, 4, 7, 1, 1, '#2a2638');
+  rect(arctx, 7, 2, 1, 5, '#a07a4a');
+  rect(arctx, 6, 1, 1, 1, '#a07a4a');
+  rect(arctx, 6, 7, 1, 1, '#a07a4a');
+  rect(arctx, 6, 2, 1, 5, 'rgba(232,216,184,0.6)');
+
+  const chargerC = mk(8, 8);
+  const chctx = chargerC.getContext('2d');
+  rect(chctx, 0, 3, 6, 4, '#7a5a3a');
+  rect(chctx, 1, 2, 3, 1, '#6a4a2e');
+  rect(chctx, 5, 2, 3, 3, '#8a6a42');
+  rect(chctx, 4, 1, 2, 1, '#e8d8b8');
+  rect(chctx, 7, 1, 1, 2, '#e8d8b8');
+  rect(chctx, 6, 3, 1, 1, '#ff4a4a');
+  rect(chctx, 7, 4, 1, 1, '#3a2a1a');
+  rect(chctx, 1, 7, 1, 1, '#3a2a1a');
+  rect(chctx, 4, 7, 1, 1, '#3a2a1a');
+
+  const knightC = mk(8, 8);
+  const kctx = knightC.getContext('2d');
+  rect(kctx, 2, 0, 4, 4, '#8a8a96');
+  rect(kctx, 2, 2, 4, 1, '#ffd23f');
+  rect(kctx, 3, 0, 2, 1, '#b0b0bc');
+  rect(kctx, 1, 4, 6, 3, '#6a6a76');
+  rect(kctx, 3, 4, 2, 3, '#8a8a96');
+  rect(kctx, 2, 7, 1, 1, '#3a3a44');
+  rect(kctx, 5, 7, 1, 1, '#3a3a44');
+
+  const shotC = mk(4, 4);
+  const shctx2 = shotC.getContext('2d');
+  rect(shctx2, 1, 0, 2, 4, '#ff4a8a');
+  rect(shctx2, 0, 1, 4, 2, '#ff4a8a');
+  rect(shctx2, 1, 1, 2, 2, '#ffd0e0');
+
+  const reflectC = tint(shotC, '#4affd8', 0.85);
+
+  const keyC = mk(8, 8);
+  const kyctx = keyC.getContext('2d');
+  rect(kyctx, 1, 1, 3, 3, '#ffd23f');
+  rect(kyctx, 2, 2, 1, 1, '#14141c');
+  rect(kyctx, 3, 3, 4, 1, '#ffd23f');
+  rect(kyctx, 5, 4, 1, 2, '#ffd23f');
+  rect(kyctx, 6, 4, 1, 1, '#ffd23f');
+  rect(kyctx, 1, 1, 1, 1, '#fff4c0');
+
+  const chestC = mk(8, 8);
+  const cctx2 = chestC.getContext('2d');
+  rect(cctx2, 0, 2, 8, 6, '#6a3e1a');
+  rect(cctx2, 0, 2, 8, 2, '#8a5428');
+  rect(cctx2, 0, 4, 8, 1, '#c8a040');
+  rect(cctx2, 0, 2, 1, 6, '#c8a040');
+  rect(cctx2, 7, 2, 1, 6, '#c8a040');
+  rect(cctx2, 3, 4, 2, 2, '#ffd23f');
+  rect(cctx2, 3, 5, 2, 1, '#14141c');
+
+  const doorC = mk(8, 8);
+  const dctx = doorC.getContext('2d');
+  rect(dctx, 0, 0, 8, 8, '#3a2412');
+  rect(dctx, 1, 0, 2, 8, '#5a3a1e');
+  rect(dctx, 5, 0, 2, 8, '#5a3a1e');
+  rect(dctx, 0, 2, 8, 1, '#7a7a86');
+  rect(dctx, 0, 6, 8, 1, '#7a7a86');
+  rect(dctx, 3, 3, 2, 3, '#c8a040');
+  rect(dctx, 3, 4, 2, 1, '#14141c');
+
+  const heartC = mk(8, 8);
+  const hctx = heartC.getContext('2d');
+  rect(hctx, 1, 2, 2, 1, '#ff6a6a');
+  rect(hctx, 5, 2, 2, 1, '#ff6a6a');
+  rect(hctx, 1, 3, 6, 2, '#ff6a6a');
+  rect(hctx, 2, 5, 4, 1, '#ff6a6a');
+  rect(hctx, 3, 6, 2, 1, '#ff6a6a');
+  rect(hctx, 2, 3, 1, 1, '#ffd0d0');
+
   const sprites = {
     floors: floorSprites,
     wall: wallC,
     gate: gateC,
     gateBack: gateBackC,
     note: noteC,
+    notes: { commune: noteC, rare: noteRareC, legendaire: noteLegendC },
+    heart: heartC,
+    key: keyC,
+    chest: chestC,
+    door: doorC,
     library: libraryC,
     sign: signC,
     decor: [bushC, rockC, crystalC, flowerC, shroomC, tuftC, skullC],
@@ -221,6 +328,18 @@ export function makeThemeSprites(theme) {
     critter: critterC,
     slime: slimeC,
     bat: batC,
+    // Par type de créature : sprite normal, variante enragée, silhouette blanche (impact).
+    mon: {
+      slime: monsterSet(slimeC, '#ff3a5a'),
+      wisp: monsterSet(batC, '#c77bff'),
+      archer: monsterSet(archerC, '#ff3a5a'),
+      charger: monsterSet(chargerC, '#ff3a5a'),
+      splitter: monsterSet(tint(slimeC, '#4ac8ff', 0.6), '#c77bff'),
+      knight: monsterSet(knightC, '#ff3a5a'),
+    },
+    bossWhite: tint(bossC, '#ffffff', 1),
+    shot: shotC,
+    shotReflected: reflectC,
     boss: bossC,
     upArrow: upArrowC,
   };
