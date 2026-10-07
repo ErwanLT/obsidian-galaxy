@@ -3,7 +3,8 @@
  * Fetches vault hierarchy from obsidian-back and maps it to visual space types.
  */
 
-const API_BASE = 'http://localhost:8080';
+// Passe par le proxy Vite (/api → obsidian-back) : même origine, pas de CORS.
+const API_BASE = '/api';
 
 export const NodeType = { DIRECTORY: 'DIRECTORY', MARKDOWN_FILE: 'MARKDOWN_FILE' };
 
@@ -44,27 +45,134 @@ export function annotate(node) {
   return node;
 }
 
+// Dossiers cachés (.obsidian, .idea, .trash…) et dossiers sans aucune note :
+// ils ne feraient que des astres vides.
+export function prune(node) {
+  node.children = (node.children || []).filter(c => {
+    if (c.type === NodeType.MARKDOWN_FILE) return true;
+    if ((c.name || '').startsWith('.')) return false;
+    prune(c);
+    return c.children.length > 0;
+  });
+  return node;
+}
+
+/**
+ * Rareté d'une note selon sa taille relative dans le vault (même règle que le
+ * RPG) : top 5 % légendaire, top 25 % rare.
+ */
+export function rankNotes(root) {
+  const notes = [];
+  const walk = n => {
+    if (n.type === NodeType.MARKDOWN_FILE) notes.push(n);
+    (n.children || []).forEach(walk);
+  };
+  walk(root);
+  const sizes = notes.map(n => n.size || 0).sort((a, b) => a - b);
+  const at = q => sizes[Math.floor(q * (sizes.length - 1))];
+  const p75 = sizes.length >= 4 ? at(0.75) : Infinity;
+  const p95 = sizes.length >= 10 ? at(0.95) : Infinity;
+  for (const n of notes) {
+    const sz = n.size || 0;
+    n.rarity = sz > 0 && sz >= p95 ? 'legendaire' : sz > 0 && sz >= p75 ? 'rare' : 'commune';
+  }
+}
+
+/**
+ * Index du vault, construit une fois : parent de chaque nœud, accès par chemin,
+ * liens sortants/entrants résolus en nœuds. Évite de reparcourir les listes de
+ * liens à chaque vue (la détection des liens comparait chaque paire d'astres).
+ */
+export function indexUniverse(data) {
+  const byPath = new Map();
+  const notes = [];
+  const walk = (n, parent) => {
+    n._parent = parent;
+    if (n.path) byPath.set(n.path, n);
+    if (n.type === NodeType.MARKDOWN_FILE) notes.push(n);
+    (n.children || []).forEach(c => walk(c, n));
+  };
+  walk(data, null);
+  for (const n of notes) {
+    n._out = [];
+    n._in = [];
+  }
+  for (const n of notes) {
+    const seen = new Set();
+    for (const link of n.links || []) {
+      const t = byPath.get(link);
+      if (!t || t === n || t.type !== NodeType.MARKDOWN_FILE || seen.has(t)) continue;
+      seen.add(t);
+      n._out.push(t);
+      t._in.push(n);
+    }
+  }
+  // Racine du vault : dossier parent des premières entrées (sert aux URL courtes).
+  const first = (data.children || []).find(c => c.path);
+  const vaultDir = first ? first.path.replace(/[\\/][^\\/]*$/, '') : '';
+  data._index = { byPath, notes, vaultDir };
+  return data;
+}
+
+/** Ancêtres d'un nœud, de la racine (exclue) au parent direct. */
+export function ancestorsOf(node) {
+  const out = [];
+  for (let p = node._parent; p && p._parent; p = p._parent) out.unshift(p);
+  return out;
+}
+
+function prepare(data) {
+  prune(data);
+  data.children = data.children.map(annotate);
+  rankNotes(data);
+  indexUniverse(data);
+  return data;
+}
+
 /** Fetch and annotate the full universe from the API */
 export async function fetchUniverse() {
-  const url = `${API_BASE}/api/universe`;
-  console.log(`[fetchUniverse] Fetching from URL: ${url}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const res = await fetch(url);
-    console.log(`[fetchUniverse] Response received. Status: ${res.status} (${res.statusText})`);
-    console.log(`[fetchUniverse] Response URL: ${res.url}`);
-    console.log(`[fetchUniverse] Content-Type Header:`, res.headers.get('content-type'));
-
-    const text = await res.text();
-    console.log(`[fetchUniverse] Raw response preview (first 200 chars):`, text.substring(0, 200));
-
-    // Try parsing as JSON
-    const data = JSON.parse(text);
-    data.children = data.children.map(annotate);
-    return data;
-  } catch (err) {
-    console.error(`[fetchUniverse] Error during fetch/parse:`, err);
-    throw err;
+    const res = await fetch(`${API_BASE}/universe`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return prepare(await res.json());
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/** Petit univers fictif, pour explorer sans le back. */
+export function demoUniverse() {
+  const md = (dir, name, kb, depth, links = []) => ({
+    id: `${dir}/${name}`, name, path: `/demo/${dir}/${name}.md`, type: NodeType.MARKDOWN_FILE,
+    depth, markdownCount: 0, size: kb * 1024, links: links.map(l => `/demo/${l}.md`), children: [],
+  });
+  const dir = (path, depth, children) => ({
+    id: path, name: path.split('/').pop(), path: `/demo/${path}`, type: NodeType.DIRECTORY, depth,
+    markdownCount: children.reduce((a, c) => a + (c.type === NodeType.MARKDOWN_FILE ? 1 : c.markdownCount), 0),
+    size: 0, links: [], children,
+  });
+  return prepare({
+    name: 'Vault démo',
+    children: [
+      dir('Projets', 0, [
+        md('Projets', 'Roadmap', 24, 1, ['Projets/Idées', 'Lectures/Clean Code']),
+        md('Projets', 'Idées', 9, 1),
+        dir('Projets/Galaxie', 1, [
+          md('Projets/Galaxie', 'Rendu 3D', 41, 2, ['Lectures/Shaders']),
+          md('Projets/Galaxie', 'Navigation', 18, 2, ['Projets/Galaxie/Rendu 3D']),
+          dir('Projets/Galaxie/Archives', 2, [md('Projets/Galaxie/Archives', 'V1', 6, 3)]),
+        ]),
+      ]),
+      dir('Lectures', 0, [
+        md('Lectures', 'Clean Code', 33, 1),
+        md('Lectures', 'Shaders', 57, 1, ['Projets/Galaxie/Rendu 3D']),
+        md('Lectures', 'DDD', 12, 1),
+      ]),
+      dir('Journal', 0, [md('Journal', '2026-10-07', 3, 1, ['Projets/Roadmap']), md('Journal', '2026-10-06', 4, 1)]),
+    ],
+  });
 }
 
 export const TYPE_EMOJI = {

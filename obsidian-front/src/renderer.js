@@ -7,10 +7,25 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { kelvinColor, seededRandom } from './objects.js';
+
+// Températures d'étoiles du ciel, pondérées comme le ciel réel vu à l'œil :
+// beaucoup de blanches et jaunes, quelques orangées, rares bleues et rouges.
+const SKY_TEMPS = [[3200, 0.08], [4300, 0.2], [5600, 0.3], [6800, 0.22], [8500, 0.12], [12000, 0.08]];
+function skyTemperature(r) {
+  let acc = 0;
+  for (const [t, w] of SKY_TEMPS) {
+    acc += w;
+    if (r < acc) return t;
+  }
+  return 6000;
+}
 
 export class GalaxyRenderer {
   constructor(canvas) {
     this.canvas = canvas;
+    this.viewShift = 0;
+    this.viewShiftTarget = 0;
     this._measure();
     this._setup();
     window.addEventListener('resize', () => this._resize());
@@ -32,7 +47,7 @@ export class GalaxyRenderer {
   _setup() {
     // Scene
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x000010, 0.0006);
+    this.scene.fog = new THREE.FogExp2(0x010103, 0.0006);
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(60, this.w / this.h, 0.1, 6000);
@@ -42,7 +57,7 @@ export class GalaxyRenderer {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.setSize(this.w, this.h);
-    this.renderer.setClearColor(0x000010, 1);
+    this.renderer.setClearColor(0x010103, 1);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
 
@@ -56,10 +71,9 @@ export class GalaxyRenderer {
     this.controls.zoomSpeed = 1.1;
     this.controls.panSpeed = 0.8;
 
-    // Lights
-    this.scene.add(new THREE.AmbientLight(0x111133, 2));
-    const dl1 = new THREE.DirectionalLight(0x7C3AED, 1.5); dl1.position.set(100,100,50); this.scene.add(dl1);
-    const dl2 = new THREE.DirectionalLight(0x06B6D4, 0.8); dl2.position.set(-100,-50,-100); this.scene.add(dl2);
+    // Lumière : seulement un faible ambiant neutre (lumière diffuse du ciel).
+    // C'est le soleil de chaque système qui éclaire ses planètes.
+    this.scene.add(new THREE.AmbientLight(0x9aa3b8, 0.18));
 
     this._buildStars();
     this._buildNebula();
@@ -87,11 +101,11 @@ export class GalaxyRenderer {
   _buildDistantGalaxies() {
     const tex = this._makeGalaxyTexture();
     const specs = [
-      { x: -1500, y:  620, z: -1100, s: 340, rot: 0.5,  o: 0.5,  c: 0xC4B5FD },
-      { x:  1650, y: -480, z:  -900, s: 260, rot: -0.8, o: 0.42, c: 0xA5F3FC },
-      { x: -1250, y: -700, z:   950, s: 200, rot: 1.1,  o: 0.34, c: 0xFBCFE8 },
-      { x:  1400, y:  760, z:   800, s: 300, rot: -0.3, o: 0.3,  c: 0xDDD6FE },
-      { x:   250, y: -900, z: -1700, s: 220, rot: 0.9,  o: 0.28, c: 0xBFDBFE },
+      { x: -1500, y:  620, z: -1100, s: 340, rot: 0.5,  o: 0.32, c: 0xFFE4C2 },
+      { x:  1650, y: -480, z:  -900, s: 260, rot: -0.8, o: 0.28, c: 0xC9D6FF },
+      { x: -1250, y: -700, z:   950, s: 200, rot: 1.1,  o: 0.22, c: 0xFFEAD0 },
+      { x:  1400, y:  760, z:   800, s: 300, rot: -0.3, o: 0.2,  c: 0xD6DEFF },
+      { x:   250, y: -900, z: -1700, s: 220, rot: 0.9,  o: 0.18, c: 0xFFF1DE },
     ];
     specs.forEach(d => {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -112,69 +126,151 @@ export class GalaxyRenderer {
     const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
     g.addColorStop(0.00, 'rgba(255,255,255,1)');
     g.addColorStop(0.12, 'rgba(255,255,255,0.75)');
-    g.addColorStop(0.35, 'rgba(200,180,255,0.30)');
-    g.addColorStop(0.65, 'rgba(150,140,220,0.10)');
+    g.addColorStop(0.35, 'rgba(235,225,215,0.30)');
+    g.addColorStop(0.65, 'rgba(200,200,215,0.10)');
     g.addColorStop(1.00, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 128, 128);
     return new THREE.CanvasTexture(c);
   }
 
+  /**
+   * Étoiles proches, en 3D (parallaxe quand on tourne) : couleurs de corps noir
+   * et luminosités en loi de puissance — quelques brillantes, une foule de faibles.
+   */
   _buildStars() {
-    const N = 14000;
+    const rnd = seededRandom(0x5eed);
+    const N = 7000;
     const pos = new Float32Array(N * 3);
     const col = new Float32Array(N * 3);
-    const sz  = new Float32Array(N);
-    const palettes = [[1,1,1],[.8,.85,1],[1,.95,.8],[.7,.7,1],[1,.8,.6]];
-
     for (let i = 0; i < N; i++) {
-      const r = 1300 + Math.random() * 900;
-      const theta = Math.random() * Math.PI * 2;
-      const phi   = Math.acos(2 * Math.random() - 1);
-      pos[i*3]   = r * Math.sin(phi) * Math.cos(theta);
-      pos[i*3+1] = r * Math.sin(phi) * Math.sin(theta) * 0.4;
-      pos[i*3+2] = r * Math.cos(phi);
-      const c = palettes[Math.floor(Math.random() * palettes.length)];
-      col[i*3]=c[0]; col[i*3+1]=c[1]; col[i*3+2]=c[2];
-      sz[i] = Math.random() < 0.025 ? 3 + Math.random() * 2 : 0.7 + Math.random() * 1.4;
+      const r = 1300 + rnd() * 900;
+      const theta = rnd() * Math.PI * 2;
+      const phi = Math.acos(2 * rnd() - 1);
+      pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      pos[i * 3 + 1] = r * Math.cos(phi);
+      pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+      const c = kelvinColor(skyTemperature(rnd()));
+      const b = Math.min(1, 0.18 + Math.pow(rnd(), 6) * 1.6);
+      col[i * 3] = c.r * b;
+      col[i * 3 + 1] = c.g * b;
+      col[i * 3 + 2] = c.b * b;
     }
-
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
-    // Additif : les étoiles se superposent au lieu de se masquer, ce qui
-    // densifie visuellement le fond sans ajouter de géométrie.
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     const mat = new THREE.PointsMaterial({
-      size: 1.7, sizeAttenuation: true, vertexColors: true,
-      transparent: true, opacity: .95, depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      size: 2.2, sizeAttenuation: true, vertexColors: true,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
     this.stars = new THREE.Points(geo, mat);
     this.scene.add(this.stars);
   }
 
+  /**
+   * Ciel de fond (scene.background, équirectangulaire) : la Voie lactée.
+   *
+   * Bande inclinée de milliers d'étoiles faibles, cœur doré du côté du centre
+   * galactique, nuages de poussière sombres et quelques nébuleuses (Hα rose,
+   * OIII turquoise). Un fond n'a pas de bord (les anciennes sphères de
+   * nébuleuse traçaient une ligne à l'écran) et ne subit pas le brouillard.
+   */
   _buildNebula() {
-    // Rayons largement supérieurs aux distances de caméra usuelles (~300).
-    // Avec des nuages de 200-360 unités, la caméra passait à l'intérieur et
-    // on voyait le bord franc de la sphère traverser l'écran.
-    const clouds = [
-      { color:0x3b0764, r:1500, x:0,    y:0,    z:0,    o:.055 },
-      { color:0x0c4a6e, r:1150, x:700,  y:-300, z:-900, o:.05  },
-      { color:0x4c1d95, r:1000, x:-900, y:200,  z:500,  o:.06  },
-      { color:0x0e7490, r:900,  x:400,  y:400,  z:850,  o:.04  },
-    ];
-    clouds.forEach(d => {
-      const m = new THREE.Mesh(
-        new THREE.SphereGeometry(d.r,16,16),
-        new THREE.MeshBasicMaterial({ color:d.color, transparent:true, opacity:d.o, side:THREE.BackSide })
-      );
-      m.position.set(d.x,d.y,d.z);
-      this.scene.add(m);
-    });
+    const W = 4096;
+    const H = 2048;
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext('2d');
+    const rnd = seededRandom(0xa11e);
+    const gauss = () => (rnd() + rnd() + rnd() + rnd() - 2) / 2;
+    ctx.fillStyle = '#010103';
+    ctx.fillRect(0, 0, W, H);
+
+    // Plan galactique : grand cercle incliné de 0,5 rad ; centre galactique en λ0.
+    const TILT = 0.5;
+    const L0 = 1.9;
+    const bandV = u => {
+      const lat = Math.asin(Math.sin(TILT) * Math.sin(u * Math.PI * 2 - L0 + Math.PI / 2));
+      return 0.5 - lat / Math.PI;
+    };
+    const coreWeight = u => {
+      const d = Math.abs(((u * Math.PI * 2 - L0 + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      return Math.exp(-(d * d) / 0.5);
+    };
+    const blob = (x, y, rad, rgb, a) => {
+      for (const dx of [-W, 0, W]) {
+        const g = ctx.createRadialGradient(x + dx, y, 0, x + dx, y, rad);
+        g.addColorStop(0, `rgba(${rgb},${a})`);
+        g.addColorStop(1, `rgba(${rgb},0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(x + dx - rad, y - rad, rad * 2, rad * 2);
+      }
+    };
+
+    // 1. Lueur diffuse de la bande, plus large et dorée vers le centre galactique.
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 700; i++) {
+      const u = rnd();
+      const core = coreWeight(u);
+      const v = bandV(u) + gauss() * 0.02 * (1 + core);
+      const warm = core > 0.3;
+      blob(u * W, v * H, (40 + rnd() * 90) * (1 + core * 1.5), warm ? '255,214,170' : '170,185,230', 0.02 + core * 0.03);
+    }
+
+    // 2. Étoiles : foule concentrée dans la bande + fond uniforme plus clairsemé.
+    const dot = (x, y, size, color, b) => {
+      ctx.fillStyle = `rgba(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)},${b})`;
+      ctx.fillRect(x, y, size, size);
+    };
+    for (let i = 0; i < 60000; i++) {
+      const u = rnd();
+      const inBand = i < 42000;
+      const v = inBand ? bandV(u) + gauss() * 0.05 * (1 + coreWeight(u)) : rnd();
+      const b = Math.pow(rnd(), 3);
+      const size = b > 0.8 ? 2 : 1;
+      dot(u * W, v * H, size, kelvinColor(skyTemperature(rnd())), 0.15 + b * 0.75);
+    }
+
+    // 3. Nuages de poussière : ils masquent la bande par endroits (rift).
+    ctx.globalCompositeOperation = 'source-over';
+    for (let i = 0; i < 260; i++) {
+      const u = rnd();
+      const v = bandV(u) + gauss() * 0.012 + 0.006 * Math.sin(u * 40);
+      blob(u * W, v * H, 18 + rnd() * 60, '2,2,6', 0.35 + coreWeight(u) * 0.25);
+    }
+
+    // 4. Quelques nébuleuses colorées, petites et rares.
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 14; i++) {
+      const u = rnd();
+      const v = bandV(u) + gauss() * 0.03;
+      blob(u * W, v * H, 20 + rnd() * 50, rnd() < 0.7 ? '255,90,140' : '80,220,210', 0.05 + rnd() * 0.05);
+    }
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.scene.background = tex;
+  }
+
+  /**
+   * Décale le centre de projection de `px` vers la gauche (le panneau d'infos
+   * occupe la droite) — animé dans tick(). Les clics restent justes : le
+   * raycaster utilise la même matrice de projection.
+   */
+  setViewShift(px) {
+    this.viewShiftTarget = px;
+  }
+
+  _applyViewShift() {
+    if (Math.abs(this.viewShift) < 0.5) this.camera.clearViewOffset();
+    else this.camera.setViewOffset(this.w, this.h, this.viewShift, 0, this.w, this.h);
   }
 
   _resize() {
     this._measure();
+    this._applyViewShift();
     this.camera.aspect = this.w / this.h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(this.w, this.h);
@@ -207,21 +303,38 @@ export class GalaxyRenderer {
       return;
     }
     const t0 = performance.now();
+    const flight = (this._flight || 0) + 1;
+    this._flight = flight;
+    this.flying = true;
 
     const tick = (now) => {
+      // Un vol plus récent a pris la main : celui-ci s'arrête, mais son action
+      // de fin a lieu quand même (ex. ouvrir le dossier après une plongée).
+      if (this._flight !== flight) {
+        if (cb) cb();
+        return;
+      }
       const p = Math.min((now - t0) / ms, 1);
       const e = p < 0.5 ? 4*p*p*p : 1 - Math.pow(-2*p+2,3)/2;   // ease-in-out cubic
       this.camera.position.lerpVectors(startPos, endPos, e);
       this.controls.target.lerpVectors(startTgt, endTgt, e);
       this.controls.update();
       if (p < 1) requestAnimationFrame(tick);
-      else if (cb) cb();
+      else {
+        this.flying = false;
+        if (cb) cb();
+      }
     };
     requestAnimationFrame(tick);
   }
 
   tick(t) {
     if (this.stars) this.stars.rotation.y = t * 0.00003;
+    if (this.viewShift !== this.viewShiftTarget) {
+      this.viewShift += (this.viewShiftTarget - this.viewShift) * 0.12;
+      if (Math.abs(this.viewShift - this.viewShiftTarget) < 0.5) this.viewShift = this.viewShiftTarget;
+      this._applyViewShift();
+    }
     this.controls.update();
 
     if (this.composer) {

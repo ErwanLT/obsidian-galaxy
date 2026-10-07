@@ -1,8 +1,16 @@
 import './style.css';
 import * as THREE from 'three';
-import { fetchUniverse, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
+import { fetchUniverse, demoUniverse, ancestorsOf, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
-import { createBody, bodyRadius, createStar, createOrbit, createLabel } from './objects.js';
+import { createBody, createStar, createOrbit, disposeTree, seededRandom, nodeSeed, bodyRadius } from './objects.js';
+import { discLayout, orbitLayout, placeMoons, orbitPoint, setOrbit, orbitShape } from './layout.js';
+import { esc, dot } from './dom.js';
+import { SearchPalette } from './search.js';
+import { renderPanel } from './panel.js';
+import { LabelLayer } from './labels.js';
+import { LinkGraph } from './links.js';
+import { hashFor, nodeForHash } from './url.js';
+import { Constellation } from './constellation.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let renderer;
@@ -10,9 +18,15 @@ let universe;
 let currentLevel = 'root';   // 'root' | 'directory'
 let currentNode = null;      // currently "entered" node
 let currentObjects = [];     // Three.js groups in the current view
-let labelObjects = [];       // label sprites
 let orbitObjects = [];       // orbit lines
-let connectionLines = [];    // Constellation lines
+let links = null;            // filaments et portails (créé avec le renderer)
+let restoringUrl = false;    // navigation issue de l'URL : on remplace l'entrée d'historique
+let holdUrl = false;         // étape intermédiaire : pas d'entrée d'historique
+let constellation = null;    // vue globale du vault (null = vue système)
+let constellationReturn = null;
+let constSelected = null;    // repère de la note sélectionnée dans la constellation
+let constHovered = null;
+const CONSTELLATION_HASH = '#/@constellation';
 let showLabels = true;
 let selectedObject = null;
 let navigationStack = [];    // breadcrumb stack [{node, camera, level}]
@@ -28,14 +42,6 @@ const loadingFill = document.getElementById('loading-fill');
 const loadingStatus = document.getElementById('loading-status');
 const hud = document.getElementById('hud');
 const infoPanel = document.getElementById('info-panel');
-const infoBadge = document.getElementById('info-badge');
-const infoName = document.getElementById('info-name');
-const infoPath = document.getElementById('info-path');
-const infoStats = document.getElementById('info-stats');
-const infoChildren = document.getElementById('info-children');
-const infoChildrenSection = document.getElementById('info-children-section');
-const btnEnter = document.getElementById('btn-enter');
-const btnOpenObsidian = document.getElementById('btn-open-obsidian');
 const btnBack = document.getElementById('btn-back');
 const btnReset = document.getElementById('btn-reset');
 const btnClosePanel = document.getElementById('btn-close-panel');
@@ -43,23 +49,21 @@ const btnSearch = document.getElementById('btn-search');
 const btnFullscreen = document.getElementById('btn-fullscreen');
 const breadcrumb = document.getElementById('breadcrumb');
 const tooltip = document.getElementById('tooltip');
-const searchOverlay = document.getElementById('search-overlay');
-const searchInput = document.getElementById('search-input');
-const searchResults = document.getElementById('search-results');
+// Choisir une note l'ouvre dans son système (caméra comprise), un dossier y emmène.
+const search = new SearchPalette(
+  {
+    overlay: document.getElementById('search-overlay'),
+    input: document.getElementById('search-input'),
+    results: document.getElementById('search-results'),
+  },
+  entry => (entry.node.type === 'MARKDOWN_FILE' ? goToNote(entry.node) : revealNode(entry)),
+);
+const labels = new LabelLayer(document.getElementById('label-layer'));
+
+// Taille minimale à l'écran (rayon en px) d'une lune : une note ne doit jamais disparaître.
+const MOON_MIN_PX = 3.5;
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-
-/** Échappe le HTML — les noms de notes viennent du disque de l'utilisateur. */
-function esc(str) {
-  return String(str).replace(/[&<>"']/g, c => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-  ));
-}
-
-/** Pastille de couleur correspondant au type d'astre. */
-function dot(visualType, cls = 'child-dot') {
-  return `<span class="${cls}" style="background:${TYPE_COLOR[visualType] || '#fff'}"></span>`;
-}
 
 function setLoadingProgress(pct, statusText) {
   if (loadingFill) loadingFill.style.width = `${pct}%`;
@@ -79,246 +83,37 @@ function hideLoading() {
   }
 }
 
-// ─── Layout helpers ───────────────────────────────────────────────────────────
-
-/**
- * Disposition des galaxies racine en disque (spirale de Fermat).
- *
- * Remplace une sphère de Fibonacci : celle-ci plaçait les deux premières
- * galaxies aux pôles, soit exactement sur l'axe vertical (x = z = 0), donc
- * superposées à l'écran dès que le vault comptait peu de dossiers racine.
- * Un disque garde aussi la lecture « carte stellaire » vue en plongée.
- */
-function discLayout(n) {
-  if (n === 0) return [];
-  if (n === 1) return [new THREE.Vector3(0, 0, 0)];
-
-  // Espacement voisin ≈ radius/√n ; on veut ~110 unités entre deux
-  // galaxies, dont le rayon peut atteindre 46.
-  const radius = Math.max(150, 110 * Math.sqrt(n));
-  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-
-  return Array.from({ length: n }, (_, i) => {
-    const r = radius * Math.sqrt((i + 0.5) / n);
-    const a = goldenAngle * i;
-    return new THREE.Vector3(
-      Math.cos(a) * r,
-      Math.sin(i * 2.4) * radius * 0.07,   // relief léger, déterministe
-      Math.sin(a) * r,
-    );
-  });
-}
-
-/**
- * Layout orbital minimaliste : UN astre par rayon, jamais de partage d'anneau.
- *
- * Chaque corps reçoit son propre rayon orbital, strictement croissant : le
- * rayon suivant commence juste après l'enveloppe du corps précédent
- * (rayon visuel + marge). Comme les ellipses décalent chaque corps sur son
- * propre plan orbital et que les angles sont répartis uniformément, aucun
- * objet ne peut recoller son voisin : c'est la garantie « un objet par rayon ».
- *
- * `sizes` = rayons visuels de chaque corps (servent à l'espacement) ; les plus
- * gros sont placés au plus près de l'astre central.
- */
-function orbitLayout(n, minR, maxR, sizes = []) {
-  const positions = new Array(n);
-  const planes = new Array(n);
-  if (n === 0) return { positions, planes };
-
-  // Les plus gros au centre (l'index original est préservé via `order`).
-  const order = sizes
-    .map((vr, i) => ({ vr: vr || 8, i }))
-    .sort((a, b) => b.vr - a.vr);
-
-  const offset = Math.random() * Math.PI * 2;
-  let prevEdge = minR;
-
-  for (let k = 0; k < n; k++) {
-    const { vr, i } = order[k];
-    // Rayon orbital : juste après le bord externe du corps précédent + marge.
-    // Pas de clamp maxR (mettre tous les corps sur un même rayon recreerait
-    // les chevauchements) ni de facteur (1-SIN_TILT) : chaque corps a SON plan
-    // orbital, les inclinaisons restent douces.
-    const center = prevEdge + vr + 8;
-
-    // Angles espacés uniformément : deux rayons voisins ne sont jamais
-    // alignés sur le même axe, ça double la marge entre eux.
-    const angle = offset + (n > 1 ? (k * Math.PI * 2) / n : 0);
-
-    positions[i] = new THREE.Vector3(
-      Math.cos(angle) * center,
-      0,
-      Math.sin(angle) * center,
-    );
-
-    planes[i] = {
-      incl: 0.06 + Math.random() * 0.10,   // pente douce, plan propre à chacun
-      omega: Math.random() * Math.PI * 2,
-    };
-
-    prevEdge = center + vr;
-  }
-  return { positions, planes };
-}
-
-/**
- * Point d'un corps sur son plan orbital incliné.
- *
- * La rotation est : inclinaison autour de X (le plan plonge vers l'axe Y),
- * puis longitude du nœud ascendant autour de Y. Même transformation que celle
- * appliquée aux sommets du tracé d'orbite dans `createOrbit`.
- */
-const _orbitPt = new THREE.Vector3();
-function orbitPoint(r, angle, incl, omega, e = 0, orient = 0) {
-  // Ellipse dans son plan, Soleil au foyer (origine) : x = a·cos(θ) − a·e
-  const a = r;
-  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
-  const c = a * e;
-  const t = angle + orient;
-  const lx = a * Math.cos(t) - c;
-  const lz = b * Math.sin(t);
-
-  const y1 = -lz * Math.sin(incl);
-  const z1 = lz * Math.cos(incl);
-
-  const so = Math.sin(omega);
-  const co = Math.cos(omega);
-  _orbitPt.set(
-    lx * co + z1 * so,
-    y1,
-    -lx * so + z1 * co,
-  );
-  return _orbitPt;
-}
-
-/**
- * Affecte les données d'orbite d'un astre cliquable.
- *
- * Orbites képlériennes : excentricité e (ellipse, Soleil au foyer) et vitesse
- * angulaire proportionnelle à 1/√a (3e loi de Képler). L'anneau tourne « en
- * bloc » : tous les corps d'un même anneau partagent vitesse et plan, deux
- * voisins ne se dépassent jamais.
- *
- * On repositionne immédiatement l'astre sur son plan incliné pour éviter tout
- * saut à la première frame.
- */
-function setOrbit(obj, pos, incl = 0, omega = 0, e = 0, orient = 0) {
-  const r = pos.length();
-
-  obj.userData.orbitRadius = r;
-  obj.userData.orbitAngle = Math.atan2(pos.z, pos.x);
-  obj.userData.orbitSpeed = 0.6 / Math.sqrt(r);   // Képler : ω ∝ a^(−1/2)
-  obj.userData.orbitIncl = incl;
-  obj.userData.orbitOmega = omega;
-  obj.userData.orbitEcc = e;
-  obj.userData.orbitOrient = orient;
-
-  const p = orbitPoint(r, obj.userData.orbitAngle, incl, omega, e, orient);
-  obj.userData.baseX = p.x;
-  obj.userData.baseY = p.y;
-  obj.userData.baseZ = p.z;
-  obj.position.set(p.x, p.y, p.z);
-}
-
 // ─── Scene building ───────────────────────────────────────────────────────────
 
-/**
- * Crée le label d'un astre et le rattache à son objet.
- *
- * Le lien explicite (`owner`) est indispensable : la boucle d'animation
- * appariait auparavant labels et objets par position dans les tableaux, ce
- * qui décalait chaque nom d'un cran dès que la vue contenait un astre
- * central non cliquable.
- */
-function addLabel(obj, node, dy, fontSize, width) {
-  if (!showLabels) return;
-  const p = obj.position;
-  const sprite = createLabel(
-    node.name,
-    new THREE.Vector3(p.x, p.y + dy, p.z),
-    TYPE_COLOR[node.visualType],
-    fontSize,
-    width,
-  );
-  sprite.userData.owner = obj;
-  sprite.userData.dy = dy;
-  renderer.scene.add(sprite);
-  labelObjects.push(sprite);
+/** Étiquette HTML de l'astre (voir labels.js). */
+function addLabel(obj, node) {
+  labels.add(obj, node, TYPE_COLOR[node.visualType], node.type === 'MARKDOWN_FILE' ? 'note' : 'dir');
 }
 
 function clearScene() {
-  currentObjects.forEach(o => renderer.scene.remove(o));
-  labelObjects.forEach(o => renderer.scene.remove(o));
-  orbitObjects.forEach(o => renderer.scene.remove(o));
-  connectionLines.forEach(c => renderer.scene.remove(c.line));
+  // Retirer de la scène ne suffit pas : sans dispose(), géométries et textures
+  // générées (surfaces de planètes, labels) restent en mémoire GPU à chaque vue.
+  const drop = o => {
+    renderer.scene.remove(o);
+    disposeTree(o);
+  };
+  if (constellation) {
+    constellation.dispose();
+    constellation = null;
+    constSelected = null;
+    constHovered = null;
+    document.body.classList.remove('is-constellation');
+    document.getElementById('constellation-bar').hidden = true;
+  }
+  currentObjects.forEach(drop);
+  labels.clear();
+  orbitObjects.forEach(drop);
+  if (links) links.clear();
   currentObjects = [];
-  labelObjects = [];
   orbitObjects = [];
-  connectionLines = [];
   hoveredObject = null;
   selectedObject = null;
   hideInfoPanel();
-}
-
-/** Check if nodeA links to nodeB (directly or as part of directory) */
-function isLinked(nodeA, nodeB) {
-  if (nodeA.type === 'MARKDOWN_FILE' && nodeA.links) {
-    for (const linkPath of nodeA.links) {
-      if (nodeB.type === 'MARKDOWN_FILE') {
-        if (linkPath === nodeB.path) return true;
-      } else {
-        if (linkPath.startsWith(nodeB.path + '/') || linkPath.startsWith(nodeB.path + '\\')) return true;
-      }
-    }
-  }
-  return false;
-}
-
-/** Create connection line segment between two objects */
-function createConnectionLine(objA, objB) {
-  const points = [objA.position.clone(), objB.position.clone()];
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  
-  const material = new THREE.LineBasicMaterial({
-    color: 0x34D399,
-    transparent: true,
-    opacity: 0.22,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  });
-  
-  const line = new THREE.Line(geometry, material);
-  renderer.scene.add(line);
-  
-  connectionLines.push({
-    line,
-    objA,
-    objB,
-    material
-  });
-}
-
-/** Build connections for all linked pairs in the current view */
-function buildConnections() {
-  connectionLines.forEach(c => renderer.scene.remove(c.line));
-  connectionLines = [];
-
-  const clickableObjects = currentObjects;
-  for (let i = 0; i < clickableObjects.length; i++) {
-    for (let j = i + 1; j < clickableObjects.length; j++) {
-      const objA = clickableObjects[i];
-      const objB = clickableObjects[j];
-      const nodeA = objA.userData?.node;
-      const nodeB = objB.userData?.node;
-
-      if (!nodeA || !nodeB) continue;
-
-      if (isLinked(nodeA, nodeB) || isLinked(nodeB, nodeA)) {
-        createConnectionLine(objA, objB);
-      }
-    }
-  }
 }
 
 /**
@@ -342,43 +137,33 @@ function buildRootView(universeData) {
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
 
-    addLabel(obj, node, 44, 44, 58);
+    addLabel(obj, node);
 
     currentObjects.push(obj);
   });
 
   // Notes posées à la racine du vault : lunes en halo, loin des superamas
-  const { positions: mPositions, planes: moonPlanes } = orbitLayout(files.length, 150, 270, files.map(bodyRadius));
+  const rootRand = seededRandom(nodeSeed({ name: universeData.name || 'root' }, 'layout:'));
+  const moons = placeMoons(files, 150, 270, rootRand);
   files.forEach((node, i) => {
-    const pos = mPositions[i];
+    const pos = moons.positions[i];
     const obj = createBody(renderer.scene, node, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega, 0.05 + Math.random() * 0.10, Math.random() * Math.PI * 2);
-    addLabel(obj, node, 6, 28, 18);
+    setOrbit(obj, pos, moons.planes[i].incl, moons.planes[i].omega, moons.shapes[i].ecc, moons.shapes[i].orient);
+    addLabel(obj, node);
     currentObjects.push(obj);
   });
 
-  buildConnections();
+  links.build(currentObjects);
   updateBreadcrumb();
   updateBackButtonState();
+  syncUrl(null);
 }
 
 // ─── Paramètres visuels par type d'astre ─────────────────────────────────────
-
-/** Labels 3D : décalage vertical, taille de police, largeur de sprite par type. */
-const LABEL_SPEC = {
-  [VisualType.SUPERCLUSTER]: { dy: 44, font: 44, width: 58 },
-  [VisualType.CLUSTER]:      { dy: 36, font: 40, width: 50 },
-  [VisualType.GALAXY]:       { dy: 30, font: 38, width: 44 },
-  [VisualType.STAR]:         { dy: 22, font: 34, width: 36 },
-  [VisualType.PLANET]:       { dy: 16, font: 32, width: 30 },
-  [VisualType.DWARF_PLANET]: { dy: 12, font: 28, width: 24 },
-  [VisualType.SMALL_BODY]:   { dy: 10, font: 26, width: 22 },
-  [VisualType.MOON]:         { dy: 6,  font: 28, width: 18 },
-};
 
 /** Plages radiales (min, max) de l'anneau des enfants par type de dossier. */
 const ORBIT_RANGE = {
@@ -403,17 +188,17 @@ const ORBIT_COLOR = {
   [VisualType.MOON]:         0x059669,
 };
 
-/** Opacité du tracé d'orbite par type : les galaxies doivent tracer leur
- *  révolution lisiblement, les lunes proches restent discrètes. */
+/** Opacité du tracé d'orbite par type : un repère discret (aucun tracé n'existe
+ *  dans le vrai ciel), plus marqué pour les grands corps. */
 const ORBIT_OPACITY = {
-  [VisualType.SUPERCLUSTER]: 0.4,
-  [VisualType.CLUSTER]:      0.4,
-  [VisualType.GALAXY]:       0.5,
-  [VisualType.STAR]:         0.35,
-  [VisualType.PLANET]:       0.35,
-  [VisualType.DWARF_PLANET]: 0.3,
-  [VisualType.SMALL_BODY]:   0.3,
-  [VisualType.MOON]:         0.14,
+  [VisualType.SUPERCLUSTER]: 0.22,
+  [VisualType.CLUSTER]:      0.22,
+  [VisualType.GALAXY]:       0.26,
+  [VisualType.STAR]:         0.2,
+  [VisualType.PLANET]:       0.2,
+  [VisualType.DWARF_PLANET]: 0.18,
+  [VisualType.SMALL_BODY]:   0.18,
+  [VisualType.MOON]:         0.1,
 };
 
 /**
@@ -440,8 +225,16 @@ function buildDirectoryView(node) {
   // Sous-dossiers : chaque enfant orbite selon son propre type céleste.
   const childType = dirs[0]?.visualType ?? VisualType.MOON;
   const range = ORBIT_RANGE[childType] || [36, 120];
-  const spec = LABEL_SPEC[childType] || LABEL_SPEC[VisualType.MOON];
-  const { positions, planes } = orbitLayout(dirs.length, range[0], range[1], dirs.map(bodyRadius));
+  const rand = seededRandom(nodeSeed(node, 'layout:'));
+  // Les notes orbitent juste au-dessus de la surface du soleil, les sous-dossiers
+  // au-delà : sans ça, les lunes d'un gros dossier tournaient dans le soleil.
+  const starEdge = (centralObj.userData.visualRadius ?? 30) + 8;
+  const moons = placeMoons(files, starEdge, starEdge + 70, rand);
+  const moonSizes = files.map(bodyRadius);
+  const moonsOuter = files.length
+    ? Math.max(...moons.positions.map((p, i) => p.length() * (1 + moons.shapes[i].ecc) + moonSizes[i]))
+    : starEdge;
+  const { positions, planes } = orbitLayout(dirs.length, Math.max(range[0], moonsOuter + 12), range[1], dirs.map(bodyRadius), rand);
 
   dirs.forEach((child, i) => {
     const pos = positions[i];
@@ -450,8 +243,7 @@ function buildDirectoryView(node) {
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    const ecc = 0.04 + Math.random() * 0.10;   // ellipse légère, Soleil au foyer
-    const orient = Math.random() * Math.PI * 2;
+    const { ecc, orient } = orbitShape(child, 0.04, 0.10);   // ellipse légère, Soleil au foyer
     setOrbit(obj, pos, planes[i].incl, planes[i].omega, ecc, orient);
 
     const orbit = createOrbit(
@@ -463,28 +255,34 @@ function buildDirectoryView(node) {
     );
     orbitObjects.push(orbit);
 
-    addLabel(obj, child, spec.dy, spec.font, spec.width);
+    addLabel(obj, child);
 
     currentObjects.push(obj);
   });
 
   // Notes Markdown : lunes en orbite proche de l'astre.
-  const { positions: mPositions, planes: moonPlanes } = orbitLayout(files.length, 38, 110, files.map(bodyRadius));
   files.forEach((child, i) => {
-    const pos = mPositions[i];
+    const pos = moons.positions[i];
     const obj = createBody(renderer.scene, child, pos, i);
     obj.userData.clickable = true;
     obj.userData.baseX = pos.x;
     obj.userData.baseY = pos.y;
     obj.userData.baseZ = pos.z;
-    setOrbit(obj, pos, moonPlanes[i].incl, moonPlanes[i].omega, 0.05 + Math.random() * 0.10, Math.random() * Math.PI * 2);
-    addLabel(obj, child, LABEL_SPEC[VisualType.MOON].dy, LABEL_SPEC[VisualType.MOON].font, LABEL_SPEC[VisualType.MOON].width);
+    setOrbit(obj, pos, moons.planes[i].incl, moons.planes[i].omega, moons.shapes[i].ecc, moons.shapes[i].orient);
+    // Tracé très discret : il rend lisible le plan propre à chaque note.
+    orbitObjects.push(createOrbit(
+      renderer.scene, center, pos.length(), ORBIT_COLOR[VisualType.MOON],
+      moons.planes[i].incl, moons.planes[i].omega, moons.shapes[i].ecc, moons.shapes[i].orient,
+      files.length > 15 ? 0.05 : ORBIT_OPACITY[VisualType.MOON],
+    ));
+    addLabel(obj, child);
     currentObjects.push(obj);
   });
 
-  buildConnections();
+  links.build(currentObjects);
   updateBreadcrumb();
   updateBackButtonState();
+  syncUrl(node);
 }
 
 // ─── Cadrage caméra ───────────────────────────────────────────────────────────
@@ -549,7 +347,11 @@ function frameCurrentView(ms = 1000) {
   });
 
   const probe = renderer.camera.clone();
+  probe.clearViewOffset();
   if (!(probe.aspect > 0)) probe.aspect = 16 / 9;
+  // Avec le panneau ouvert, la vue est décalée de `shift` px : l'espace libre
+  // se réduit de 2·shift en largeur, la marge horizontale aussi.
+  const xLimit = FRAME_FILL - (2 * renderer.viewShiftTarget) / renderer.w;
 
   let d = Math.max(radius * 1.6, 40);
   for (let i = 0; i < 24 && pts.length > 0; i++) {
@@ -565,7 +367,7 @@ function frameCurrentView(ms = 1000) {
       const local = p.clone().applyMatrix4(probe.matrixWorldInverse);
       if (local.z > -probe.near) { worst = Infinity; break; }
       const ndc = p.clone().project(probe);
-      worst = Math.max(worst, Math.abs(ndc.x), Math.abs(ndc.y));
+      worst = Math.max(worst, (Math.abs(ndc.x) * FRAME_FILL) / xLimit, Math.abs(ndc.y));
     }
 
     if (worst <= FRAME_FILL) break;
@@ -587,8 +389,22 @@ function enterNode(node) {
 
   navigationStack.push({ node: currentNode, camera: savedCamera, level: currentLevel });
 
-  buildDirectoryView(node);
-  frameCurrentView(1000);
+  // Plongée : la caméra fonce dans l'astre, puis le système apparaît depuis son soleil.
+  const obj = currentObjects.find(o => o.userData.node === node);
+  const open = () => {
+    buildDirectoryView(node);
+    renderer.camera.position.set(0, 10, 26);
+    renderer.controls.target.set(0, 0, 0);
+    frameCurrentView(1100);
+  };
+  if (!obj) {
+    open();
+    return;
+  }
+  const wp = obj.position.clone();
+  const toCam = renderer.camera.position.clone().sub(wp).normalize();
+  const close = (obj.userData.visualRadius ?? 10) * 0.6;
+  renderer.flyTo(wp.clone().addScaledVector(toCam, close), wp, 480, open);
 }
 
 function goBack() {
@@ -609,6 +425,17 @@ function goBack() {
   }
 }
 
+/** Remonte d'un coup à l'entrée `i` de la pile : une seule reconstruction, un seul vol. */
+function goBackTo(i) {
+  if (i < 0 || i >= navigationStack.length) return;
+  const target = navigationStack[i];
+  navigationStack = navigationStack.slice(0, i);
+  if (target.level === 'root' || !target.node) buildRootView(universe);
+  else buildDirectoryView(target.node);
+  if (target.camera) renderer.flyTo(target.camera.pos, target.camera.target, 900);
+  else frameCurrentView(900);
+}
+
 function resetToRoot() {
   navigationStack = [];
   buildRootView(universe);
@@ -622,87 +449,27 @@ function updateBackButtonState() {
 
 // ─── Info Panel ───────────────────────────────────────────────────────────────
 
-const MAX_CHILDREN_SHOWN = 14;
+/** Ouvre un enfant depuis le panneau : on entre dans un dossier, on sélectionne une note. */
+function openChild(child) {
+  if (child.type !== 'MARKDOWN_FILE') {
+    enterNode(child);
+    return;
+  }
+  const obj = currentObjects.find(o => o.userData.node === child);
+  if (obj) selectObject(obj);
+  else goToNote(child);
+}
 
 function showInfoPanel(node) {
-  const vt = node.visualType;
-
-  if (infoBadge) {
-    infoBadge.textContent = TYPE_LABEL[vt] || '';
-    infoBadge.className = vt;
-  }
-
-  if (infoName) infoName.textContent = node.name;
-  if (infoPath) infoPath.textContent = node.path || '';
-
-  // Stats en lignes label → valeur : ça se scanne verticalement.
-  const children = node.children || [];
-  const folders = children.filter(c => c.type === 'DIRECTORY').length;
-  if (infoStats) {
-    const rows = [['Notes', node.markdownCount ?? 0]];
-    if (folders > 0) rows.push(['Sous-dossiers', folders]);
-    if (children.length > 0) rows.push(['Objets en orbite', children.length]);
-    rows.push(['Profondeur', `Niveau ${node.depth ?? 0}`]);
-    infoStats.innerHTML = rows.map(([lbl, val]) => `
-      <div class="stat-row">
-        <span class="stat-lbl">${esc(lbl)}</span>
-        <span class="stat-val">${esc(val)}</span>
-      </div>`).join('');
-  }
-
-  // Liste du contenu, numérotée
-  if (infoChildren) {
-    infoChildren.innerHTML = '';
-    children.slice(0, MAX_CHILDREN_SHOWN).forEach((child, i) => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'child-item';
-      item.title = child.name;
-      item.innerHTML = `
-        <span class="child-num">${i + 1}</span>
-        ${dot(child.visualType)}
-        <span class="child-name">${esc(child.name)}</span>
-      `;
-      item.addEventListener('click', () => {
-        if (child.type !== 'MARKDOWN_FILE') enterNode(child);
-        else showInfoPanel(child);
-      });
-      infoChildren.appendChild(item);
-    });
-    if (children.length > MAX_CHILDREN_SHOWN) {
-      const more = document.createElement('div');
-      more.className = 'child-more';
-      more.textContent = `+ ${children.length - MAX_CHILDREN_SHOWN} autres`;
-      infoChildren.appendChild(more);
-    }
-  }
-
-  // On masque toute la section quand il n'y a rien à lister, plutôt
-  // que de laisser un titre orphelin.
-  if (infoChildrenSection) {
-    infoChildrenSection.style.display = children.length > 0 ? '' : 'none';
-  }
-
-  if (btnEnter) {
-    const canEnter = vt !== VisualType.MOON && children.length > 0;
-    btnEnter.style.display = canEnter ? 'flex' : 'none';
-    btnEnter.onclick = canEnter ? () => enterNode(node) : null;
-  }
-
-  if (btnOpenObsidian) {
-    const isMarkdownFile = vt === VisualType.MOON || node.type === 'MARKDOWN_FILE';
-    btnOpenObsidian.style.display = isMarkdownFile ? 'flex' : 'none';
-    btnOpenObsidian.onclick = isMarkdownFile ? () => {
-      if (node.path) {
-        window.location.href = `obsidian://open?path=${encodeURIComponent(node.path)}`;
-      }
-    } : null;
-  }
-
-  if (infoPanel) {
-    infoPanel.classList.remove('panel-hidden');
-    infoPanel.classList.add('panel-visible');
-  }
+  renderPanel(node, {
+    isCurrent: node === currentNode,
+    onEnter: () => enterNode(node),
+    onEntry: n => (node.type === 'MARKDOWN_FILE' ? goToNote(n) : openChild(n)),
+  });
+  infoPanel.classList.remove('panel-hidden');
+  infoPanel.classList.add('panel-visible');
+  // Recentre la scène dans l'espace laissé libre à gauche du panneau.
+  if (renderer) renderer.setViewShift(window.innerWidth > 768 ? 176 : 0);
 }
 
 function hideInfoPanel() {
@@ -710,6 +477,7 @@ function hideInfoPanel() {
     infoPanel.classList.add('panel-hidden');
     infoPanel.classList.remove('panel-visible');
   }
+  if (renderer) renderer.setViewShift(0);
   selectedObject = null;
 }
 
@@ -736,19 +504,16 @@ function updateBreadcrumb() {
     breadcrumb.appendChild(item);
   };
 
-  addItem('Univers', null, navigationStack.length > 0 ? resetToRoot : null);
+  addItem('Univers', null, navigationStack.length > 0 || constellation ? resetToRoot : null);
 
   navigationStack.forEach((entry, i) => {
-    if (!entry.node) return;
-    addItem(entry.node.name, entry.node.visualType, () => {
-      // Remonter jusqu'à ce niveau : il faut dépiler les entrées au-dessus
-      // (observateur ≤ i), pas en dessous.
-      const stepsBack = navigationStack.length - i;
-      for (let s = 0; s < stepsBack; s++) goBack();
-    });
+    if (!entry.node || constellation) return;
+    // L'entrée i de la pile est la vue « dans » entry.node : on y remonte directement.
+    addItem(entry.node.name, entry.node.visualType, () => goBackTo(i));
   });
 
-  if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
+  if (constellation) addItem('Constellation', null, null);
+  else if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
 }
 
 // ─── Raycasting / Interaction ─────────────────────────────────────────────────
@@ -773,16 +538,40 @@ function raycast(event) {
   return getClickableObjects().find(g => g.children.includes(hitObj)) || null;
 }
 
+function onMouseMoveConstellation(event) {
+  const note = pickStar(event);
+  constHovered = note ? constellation.proxyOf(note) : null;
+  renderer.domElement.style.cursor = note ? 'pointer' : 'grab';
+  if (!tooltip) return;
+  if (note) {
+    const cites = (note._in || []).length;
+    tooltip.innerHTML = `${dot(VisualType.MOON, 'tip-dot')}<span>${esc(note.name)}${cites ? ` · ${cites} citation${cites > 1 ? 's' : ''}` : ''}</span>`;
+    tooltip.classList.add('visible');
+    tooltip.style.left = `${event.clientX + 14}px`;
+    tooltip.style.top = `${event.clientY - 10}px`;
+  } else {
+    tooltip.classList.remove('visible');
+  }
+}
+
+function pickStar(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, renderer.camera);
+  return constellation.pick(raycaster, renderer.camera);
+}
+
 function onMouseMove(event) {
+  if (constellation) {
+    onMouseMoveConstellation(event);
+    return;
+  }
   const hit = raycast(event);
 
   if (hit !== hoveredObject) {
-    if (hoveredObject) {
-      hoveredObject.scale.setScalar(1);
-    }
     hoveredObject = hit;
     if (hoveredObject) {
-      hoveredObject.scale.setScalar(1.08);
       if (renderer) renderer.domElement.style.cursor = 'pointer';
 
       const node = hoveredObject.userData.node;
@@ -805,11 +594,20 @@ function onMouseMove(event) {
 let lastClickTime = 0;
 
 function onClick(event) {
+  if (constellation) {
+    const note = pickStar(event);
+    const now = Date.now();
+    const isDouble = note && now - lastClickTime < 350;
+    lastClickTime = now;
+    if (isDouble) goToNote(note);   // double-clic : on rejoint la note dans son système
+    else selectStar(note);
+    return;
+  }
   const hit = raycast(event);
   if (!hit) {
     // If not clicking UI, hide info panel
     if (!event.target.closest('#hud') && !event.target.closest('#tooltip')) {
-      hideInfoPanel();
+      closePanel();
     }
     return;
   }
@@ -823,19 +621,148 @@ function onClick(event) {
     return;
   }
 
-  // Single click — select + info
-  selectedObject = hit;
-  showInfoPanel(hit.userData.node);
+  selectObject(hit);
+}
 
-  // Fly camera gently toward it
+/** Sélectionne un astre : panneau d'infos, vol doux vers lui, URL si c'est une note. */
+function selectObject(obj, ms = 700) {
+  selectedObject = obj;
+  const node = obj.userData.node;
+  showInfoPanel(node);
   const wp = new THREE.Vector3();
-  hit.getWorldPosition(wp);
-  const camOffset = renderer.camera.position.clone().sub(wp).normalize().multiplyScalar(60);
+  obj.getWorldPosition(wp);
+  const dist = Math.max(30, (obj.userData.visualRadius ?? 10) * 5);
+  const camOffset = renderer.camera.position.clone().sub(wp).normalize().multiplyScalar(dist);
   renderer.flyTo(
-    { x: wp.x + camOffset.x, y: wp.y + camOffset.y + 15, z: wp.z + camOffset.z },
+    { x: wp.x + camOffset.x, y: wp.y + camOffset.y + dist * 0.25, z: wp.z + camOffset.z },
     { x: wp.x, y: wp.y, z: wp.z },
-    700,
+    ms,
   );
+  if (node.type === 'MARKDOWN_FILE') syncUrl(node);
+}
+
+/** Astres sélectionnables au clavier, dans l'ordre d'affichage. */
+function cycleSelection(step) {
+  const list = getClickableObjects();
+  if (!list.length) return;
+  const i = list.indexOf(selectedObject);
+  selectObject(list[(i + step + list.length) % list.length], 500);
+}
+
+/** Va voir une note n'importe où dans le vault (liens, portails, URL). */
+function goToNote(note) {
+  // Une seule entrée d'historique (la note), pas une pour le dossier traversé.
+  holdUrl = true;
+  revealNode({ node: note, ancestors: ancestorsOf(note) }, { frame: false });
+  holdUrl = false;
+  const obj = currentObjects.find(o => o.userData.node === note);
+  if (obj) selectObject(obj, 900);
+  else {
+    frameCurrentView(900);
+    syncUrl(note);
+  }
+}
+
+function onPortal(notes, folder) {
+  if (notes.length === 1) goToNote(notes[0]);
+  else revealNode({ node: folder, ancestors: ancestorsOf(folder) });
+}
+
+// ─── Constellation ────────────────────────────────────────────────────────────
+
+function enterConstellation() {
+  if (constellation || !universe) return;
+  constellationReturn = currentNode;
+  clearScene();
+  constellation = new Constellation(renderer.scene, universe);
+  for (const p of constellation.proxies) labels.add(p, p.userData.node, '#cbd5e1', 'note');
+  const { center, radius } = constellation.bounds();
+  renderer.flyTo(
+    { x: center.x, y: center.y + radius * 0.55, z: center.z + radius * 1.55 },
+    center,
+    1300,
+  );
+  document.body.classList.add('is-constellation');
+  document.getElementById('constellation-bar').hidden = false;
+  setConstellationFilter('all');
+  breadcrumb.innerHTML = '';
+  updateBreadcrumb();
+  if (!restoringUrl && location.hash !== CONSTELLATION_HASH) history.pushState(null, '', CONSTELLATION_HASH);
+}
+
+function exitConstellation() {
+  if (!constellation) return;
+  if (constellationReturn) buildDirectoryView(constellationReturn);
+  else buildRootView(universe);
+  frameCurrentView(1100);
+}
+
+function toggleConstellation() {
+  if (constellation) exitConstellation();
+  else enterConstellation();
+}
+
+function setConstellationFilter(kind) {
+  if (!constellation) return;
+  constellation.setFilter(kind);
+  document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
+    b.classList.toggle('is-active', b.dataset.filter === kind);
+  });
+  document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
+}
+
+function selectStar(note) {
+  constSelected = note ? constellation.proxyOf(note) : null;
+  constellation.setFocus(note);
+  if (!note) {
+    hideInfoPanel();
+    return;
+  }
+  showInfoPanel(note);
+  const wp = new THREE.Vector3();
+  constSelected.getWorldPosition(wp);
+  const dir = renderer.camera.position.clone().sub(wp).normalize();
+  renderer.flyTo(wp.clone().addScaledVector(dir, 90), wp, 800);
+}
+
+// ─── URL ──────────────────────────────────────────────────────────────────────
+
+function syncUrl(node, replace = false) {
+  if (!universe || !universe._index || holdUrl) return;
+  const h = hashFor(node, universe._index.vaultDir);
+  if (location.hash === h) return;
+  if (replace || restoringUrl) history.replaceState(null, '', h);
+  else history.pushState(null, '', h);
+}
+
+function navigateFromUrl() {
+  const node = nodeForHash(location.hash, universe && universe._index);
+  restoringUrl = true;
+  try {
+    if (location.hash === CONSTELLATION_HASH) {
+      enterConstellation();
+    } else if (!node) {
+      navigationStack = [];
+      buildRootView(universe);
+      frameCurrentView(900);
+    } else if (node.type === 'MARKDOWN_FILE') {
+      goToNote(node);
+    } else {
+      revealNode({ node, ancestors: ancestorsOf(node) }, { panel: false });
+    }
+  } finally {
+    restoringUrl = false;
+  }
+}
+
+/** Fermeture du panneau par l'utilisateur : l'URL revient au dossier affiché. */
+function closePanel() {
+  if (constellation) {
+    selectStar(null);
+    return;
+  }
+  hideInfoPanel();
+  syncUrl(currentNode, true);
 }
 
 // ─── Animations ───────────────────────────────────────────────────────────────
@@ -870,42 +797,9 @@ function animateObjects(time) {
       case VisualType.SUPERCLUSTER:
       case VisualType.CLUSTER:
       case VisualType.GALAXY:
-        // L'astre central tourne très lentement, les corps périphériques un peu plus vite
-        obj.rotation.y = isClickable ? (t * 0.01 + i * 1.2) : (t * 0.002);
-
-        // Animation fluide des bras spiraux par écoulement radial
-        obj.children.forEach(c => {
-          if (c.userData?.isDisc) {
-            const geo = c.geometry;
-            const positions = geo.attributes.position.array;
-
-            const u0s = c.userData.u0s;
-            const radialSpeeds = c.userData.radialSpeeds;
-            const arms = c.userData.arms;
-            const jitters = c.userData.jitters;
-            const rJitters = c.userData.rJitters;
-            const bulge = c.userData.bulge;
-            const radius = c.userData.radius;
-
-            if (u0s && radialSpeeds && arms && jitters && rJitters) {
-              const N = u0s.length;
-              const ARMS = 2;
-              for (let j = 0; j < N; j++) {
-                // Écoulement radial : u augmente et boucle entre 0 et 1
-                const u = (u0s[j] + t * radialSpeeds[j]) % 1.0;
-
-                // Calcul de la position le long du bras spiral
-                const r_base = bulge * 0.8 + u * radius;
-                const rr = r_base * (1 + rJitters[j]);
-                const angle = (arms[j] / ARMS) * Math.PI * 2 + u * 3.1 * Math.PI + t * 0.05 + jitters[j];
-
-                positions[j * 3]     = Math.cos(angle) * rr;
-                positions[j * 3 + 2] = Math.sin(angle) * rr;
-              }
-              geo.attributes.position.needsUpdate = true;
-            }
-          }
-        });
+        // Le disque tourne autour de son propre axe (incliné) : les bras sont des
+        // ondes de densité, ils ne « coulent » pas vers l'extérieur.
+        if (obj.userData.spin) obj.userData.spin.rotation.y = t * (isClickable ? 0.03 : 0.01);
         break;
       case VisualType.STAR:
         obj.rotation.y = isClickable ? (t * 0.04 + i * 0.7) : (t * 0.005);
@@ -939,70 +833,23 @@ function animateObjects(time) {
     }
   });
 
-  // Chaque label suit l'astre auquel il est rattaché
-  labelObjects.forEach(sprite => {
-    const obj = sprite.userData.owner;
-    if (!obj) return;
-    sprite.position.set(
-      obj.position.x,
-      obj.position.y + sprite.userData.dy,
-      obj.position.z,
-    );
-  });
-
-  // Mettre à jour les positions et l'apparence des lignes de constellation
-  connectionLines.forEach(c => {
-    const positions = c.line.geometry.attributes.position.array;
-    positions[0] = c.objA.position.x;
-    positions[1] = c.objA.position.y;
-    positions[2] = c.objA.position.z;
-    positions[3] = c.objB.position.x;
-    positions[4] = c.objB.position.y;
-    positions[5] = c.objB.position.z;
-    c.line.geometry.attributes.position.needsUpdate = true;
-
-    let targetOpacity = 0.22;
-    let targetColor = 0x34D399; // Couleur de lune par défaut
-
-    if (selectedObject) {
-      if (c.objA === selectedObject || c.objB === selectedObject) {
-        targetOpacity = 0.85;
-        targetColor = 0x10B981; // Brillant
-      } else {
-        targetOpacity = 0.04; // Atténué
-      }
-    } else if (hoveredObject) {
-      if (c.objA === hoveredObject || c.objB === hoveredObject) {
-        targetOpacity = 0.85;
-        targetColor = 0x10B981;
-      } else {
-        targetOpacity = 0.04;
-      }
+  // Échelle : grossissement au survol, et taille minimale à l'écran pour les lunes.
+  const cam = renderer.camera;
+  const pxPerUnit = renderer.h / 2 / Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
+  currentObjects.forEach(obj => {
+    if (obj.userData.type === 'star' || !obj.userData.clickable) return;
+    let s = obj === hoveredObject ? 1.08 : 1;
+    const core = obj.userData.coreRadius;
+    if (core) {
+      const dist = obj.position.distanceTo(cam.position);
+      s *= Math.max(1, (MOON_MIN_PX * dist) / pxPerUnit / core);
     }
-
-    c.material.opacity = THREE.MathUtils.lerp(c.material.opacity, targetOpacity, 0.12);
-    c.material.color.setHex(targetColor);
+    obj.scale.setScalar(s);
   });
+
 }
 
 // ─── Recherche ────────────────────────────────────────────────────────────────
-
-let flatIndex = [];      // [{ node, ancestors }] — aplatissement de l'arbre
-let searchHits = [];
-let activeHit = 0;
-
-function buildSearchIndex(universeData) {
-  flatIndex = [];
-  const walk = (node, ancestors) => {
-    flatIndex.push({ node, ancestors });
-    (node.children || []).forEach(c => walk(c, [...ancestors, node]));
-  };
-  (universeData.children || []).forEach(c => walk(c, []));
-}
-
-function levelForDepth() {
-  return 'directory';
-}
 
 function buildViewFor(node) {
   if (node.type === 'MARKDOWN_FILE') return false;
@@ -1015,7 +862,7 @@ function buildViewFor(node) {
  * de navigation à partir des ancêtres, sinon le fil d'Ariane et le bouton
  * Retour se retrouveraient désynchronisés de la vue affichée.
  */
-function revealNode(entry) {
+function revealNode(entry, { panel = true, frame = true } = {}) {
   const { node, ancestors } = entry;
   const isFile = node.type === 'MARKDOWN_FILE';
   // Un fichier n'a pas de vue propre : on ouvre son dossier parent.
@@ -1026,7 +873,7 @@ function revealNode(entry) {
   // restaurer une position que l'utilisateur n'a jamais occupée.
   navigationStack = [{ node: null, camera: null, level: 'root' }];
   chain.forEach(a => navigationStack.push({
-    node: a, camera: null, level: levelForDepth(a.depth),
+    node: a, camera: null, level: 'directory',
   }));
 
   if (!viewNode || !buildViewFor(viewNode)) {
@@ -1036,86 +883,8 @@ function revealNode(entry) {
 
   updateBreadcrumb();
   updateBackButtonState();
-  frameCurrentView(900);
-  showInfoPanel(node);   // après buildView, qui vide le panneau
-}
-
-function highlight(name, q) {
-  const i = name.toLowerCase().indexOf(q);
-  if (i < 0) return esc(name);
-  return esc(name.slice(0, i))
-    + `<mark>${esc(name.slice(i, i + q.length))}</mark>`
-    + esc(name.slice(i + q.length));
-}
-
-function setActiveHit(i) {
-  if (searchHits.length === 0) return;
-  activeHit = (i + searchHits.length) % searchHits.length;
-  [...searchResults.children].forEach((el, n) => {
-    el.classList.toggle('is-active', n === activeHit);
-  });
-  searchResults.children[activeHit]?.scrollIntoView({ block: 'nearest' });
-}
-
-function renderSearchResults(query) {
-  const q = query.trim().toLowerCase();
-  searchResults.innerHTML = '';
-  searchHits = [];
-  if (!q) return;
-
-  searchHits = flatIndex
-    .filter(e => e.node.name.toLowerCase().includes(q))
-    .sort((a, b) => {
-      // Les correspondances en début de nom d'abord, puis les noms courts.
-      const ai = a.node.name.toLowerCase().indexOf(q);
-      const bi = b.node.name.toLowerCase().indexOf(q);
-      return ai - bi || a.node.name.length - b.node.name.length;
-    })
-    .slice(0, 40);
-
-  if (searchHits.length === 0) {
-    searchResults.innerHTML =
-      `<div class="search-empty">Aucun résultat pour « ${esc(query.trim())} »</div>`;
-    return;
-  }
-
-  searchHits.forEach((entry, i) => {
-    const { node, ancestors } = entry;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'search-hit';
-    const parents = ancestors.map(a => a.name).join(' / ') || 'Univers';
-    btn.innerHTML = `
-      ${dot(node.visualType, 'search-hit-dot')}
-      <span class="search-hit-text">
-        <span class="search-hit-name">${highlight(node.name, q)}</span>
-        <span class="search-hit-path">${esc(parents)}</span>
-      </span>
-      <span class="search-hit-type">${esc(TYPE_LABEL[node.visualType] || '')}</span>
-    `;
-    btn.addEventListener('click', () => { closeSearch(); revealNode(entry); });
-    btn.addEventListener('mouseenter', () => setActiveHit(i));
-    searchResults.appendChild(btn);
-  });
-
-  setActiveHit(0);
-}
-
-function openSearch() {
-  if (!searchOverlay) return;
-  searchOverlay.classList.remove('hidden');
-  searchInput.value = '';
-  renderSearchResults('');
-  searchInput.focus();
-}
-
-function closeSearch() {
-  if (!searchOverlay) return;
-  searchOverlay.classList.add('hidden');
-}
-
-function isSearchOpen() {
-  return searchOverlay && !searchOverlay.classList.contains('hidden');
+  if (panel) showInfoPanel(node);   // après buildView (qui vide le panneau), avant le cadrage qui en tient compte
+  if (frame) frameCurrentView(900);
 }
 
 // ─── Contrôles de vue ─────────────────────────────────────────────────────────
@@ -1131,12 +900,17 @@ function zoomBy(factor) {
 
 function toggleLabels() {
   showLabels = !showLabels;
-  labelObjects.forEach(l => { l.visible = showLabels; });
+  labels.setVisible(showLabels);
   const btn = document.getElementById('btn-tool-labels');
   if (btn) btn.classList.toggle('is-off', !showLabels);
 }
 
 function recenter() {
+  if (constellation) {
+    const { center, radius } = constellation.bounds();
+    renderer.flyTo({ x: center.x, y: center.y + radius * 0.55, z: center.z + radius * 1.55 }, center, 700);
+    return;
+  }
   frameCurrentView(700);
 }
 
@@ -1147,13 +921,97 @@ function toggleFullscreen() {
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
+// Astres dont l'étiquette passe en priorité : survolé, sélectionné, et ceux qui lui sont liés.
+function focusSet() {
+  const set = new Set();
+  if (constellation) {
+    if (constHovered) set.add(constHovered);
+    if (constSelected) {
+      set.add(constSelected);
+      for (const o of constellation.neighborsOf(constSelected.userData.node)) set.add(o);
+    }
+    return set;
+  }
+  const anchor = selectedObject || hoveredObject;
+  if (hoveredObject) set.add(hoveredObject);
+  if (selectedObject) set.add(selectedObject);
+  if (anchor && links) for (const o of links.neighbors(anchor)) set.add(o);
+  return set;
+}
+
+// La caméra accompagne l'astre sélectionné sur son orbite (sinon il sort du champ).
+let followed = null;
+const followPrev = new THREE.Vector3();
+function followSelection() {
+  if (selectedObject !== followed) {
+    followed = selectedObject;
+    if (followed) followPrev.copy(followed.position);
+    return;
+  }
+  if (!followed) return;
+  if (!renderer.flying) {
+    const delta = followed.position.clone().sub(followPrev);
+    renderer.camera.position.add(delta);
+    renderer.controls.target.add(delta);
+  }
+  followPrev.copy(followed.position);
+}
+
 function loop(time) {
   animateObjects(time);
-  if (renderer) renderer.tick(time);
+  if (renderer) followSelection();
+  if (renderer) {
+    renderer.tick(time);
+    const size = { w: renderer.w, h: renderer.h };
+    labels.update(renderer.camera, size, focusSet());
+    links.setPortals(selectedObject);
+    links.update(selectedObject, hoveredObject, renderer.camera, size);
+  }
   requestAnimationFrame(loop);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+
+function startWith(data) {
+  universe = data;
+  search.setUniverse(universe);
+  const initial = location.hash;
+  restoringUrl = true;
+  buildRootView(universe);
+  restoringUrl = false;
+  if (initial && initial !== '#/') {
+    history.replaceState(null, '', initial);
+    navigateFromUrl();
+  } else {
+    frameCurrentView(1600);   // se joue pendant le fondu de l'écran de chargement
+  }
+  setLoadingProgress(100, 'Prêt !');
+  setTimeout(() => {
+    hideLoading();
+    showHUD();
+  }, 600);
+}
+
+async function loadUniverse(kind) {
+  const actions = document.getElementById('loading-actions');
+  if (actions) actions.hidden = true;
+  if (loadingFill) loadingFill.style.background = '';
+  if (kind === 'demo') {
+    startWith(demoUniverse());
+    return;
+  }
+  try {
+    setLoadingProgress(60, "Chargement de l'univers de notes…");
+    const data = await fetchUniverse();
+    setLoadingProgress(80, 'Génération de la carte stellaire…');
+    startWith(data);
+  } catch (err) {
+    console.error('Failed to load universe:', err);
+    if (loadingFill) loadingFill.style.background = '#F43F5E';
+    setLoadingProgress(100, 'Impossible de joindre obsidian-back. Lance le backend (./mvnw spring-boot:run) puis réessaie.');
+    if (actions) actions.hidden = false;
+  }
+}
 
 async function init() {
   setLoadingProgress(10, "Initialisation de la scène 3D…");
@@ -1165,36 +1023,14 @@ async function init() {
     return;
   }
   renderer = new GalaxyRenderer(canvas);
+  links = new LinkGraph(renderer.scene, document.getElementById('portal-layer'), onPortal);
+  window.addEventListener('popstate', () => { if (universe) navigateFromUrl(); });
   setLoadingProgress(30, "Connexion à l'API obsidian-back…");
 
-  // Fetch data
-  try {
-    setLoadingProgress(60, "Chargement de l'univers de notes…");
-    const raw = await fetchUniverse();
-    setLoadingProgress(80, "Génération de la carte stellaire…");
+  await loadUniverse('real');
 
-    universe = raw;
-    buildSearchIndex(universe);
-
-    // Build scene
-    buildRootView(universe);
-    frameCurrentView(1600);   // se joue pendant le fondu de l'écran de chargement
-    setLoadingProgress(100, "Prêt !");
-
-    // Show app
-    setTimeout(() => {
-      hideLoading();
-      showHUD();
-    }, 600);
-
-  } catch (err) {
-    console.error('Failed to load universe:', err);
-    if (loadingFill) loadingFill.style.background = '#F43F5E';
-    if (loadingStatus) {
-      loadingStatus.textContent =
-        '⚠ Impossible de contacter l\'API obsidian-back (localhost:8080). Assure-toi que le backend tourne.';
-    }
-  }
+  document.getElementById('btn-retry')?.addEventListener('click', () => loadUniverse('real'));
+  document.getElementById('btn-demo')?.addEventListener('click', () => loadUniverse('demo'));
 
   // ── Scène ──
   canvas.addEventListener('mousemove', onMouseMove);
@@ -1203,10 +1039,10 @@ async function init() {
   // ── Navigation ──
   btnBack?.addEventListener('click', goBack);
   btnReset?.addEventListener('click', resetToRoot);
-  btnClosePanel?.addEventListener('click', hideInfoPanel);
+  btnClosePanel?.addEventListener('click', closePanel);
 
   // ── Header ──
-  btnSearch?.addEventListener('click', openSearch);
+  btnSearch?.addEventListener('click', () => search.open());
   btnFullscreen?.addEventListener('click', toggleFullscreen);
 
   // ── Toolbar ──
@@ -1214,38 +1050,33 @@ async function init() {
   document.getElementById('btn-tool-zoom-out')?.addEventListener('click', () => zoomBy(-0.25));
   document.getElementById('btn-tool-labels')?.addEventListener('click', toggleLabels);
   document.getElementById('btn-tool-recenter')?.addEventListener('click', recenter);
+  document.getElementById('btn-tool-constellation')?.addEventListener('click', toggleConstellation);
+  document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
+    b.addEventListener('click', () => setConstellationFilter(b.dataset.filter));
+  });
+  document.getElementById('btn-exit-constellation')?.addEventListener('click', exitConstellation);
 
   // ── Recherche ──
-  searchInput?.addEventListener('input', () => renderSearchResults(searchInput.value));
-  searchInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown')      { e.preventDefault(); setActiveHit(activeHit + 1); }
-    else if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveHit(activeHit - 1); }
-    else if (e.key === 'Enter' && searchHits[activeHit]) {
-      e.preventDefault();
-      const entry = searchHits[activeHit];
-      closeSearch();
-      revealNode(entry);
-    }
-  });
-  // Clic en dehors de la boîte = fermeture
-  searchOverlay?.addEventListener('click', (e) => {
-    if (e.target === searchOverlay) closeSearch();
-  });
-
   // ── Raccourcis clavier ──
   window.addEventListener('keydown', (e) => {
-    if (isSearchOpen()) {
-      if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+    if (search.isOpen) {
+      if (e.key === 'Escape') { e.preventDefault(); search.close(); }
       return;   // la palette gère ses propres flèches / Entrée
     }
     // Cmd/Ctrl+K ou « / » ouvrent la recherche
     if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || e.key === '/') {
-      e.preventDefault(); openSearch(); return;
+      e.preventDefault(); search.open(); return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     switch (e.key) {
-      case 'Escape':    hideInfoPanel(); break;
+      case 'Escape':    closePanel(); break;
+      case 'g': case 'G': toggleConstellation(); break;
+      case 'ArrowRight': e.preventDefault(); cycleSelection(1); break;
+      case 'ArrowLeft':  e.preventDefault(); cycleSelection(-1); break;
+      case 'Enter':
+        if (selectedObject && selectedObject.userData.node.type !== 'MARKDOWN_FILE') enterNode(selectedObject.userData.node);
+        break;
       case 'Backspace': e.preventDefault(); goBack(); break;
       case 'r': case 'R': resetToRoot(); break;
       case 'l': case 'L': toggleLabels(); break;
@@ -1259,6 +1090,15 @@ async function init() {
   // Start loop
   requestAnimationFrame(loop);
 }
+
+// Accès de debug (console) à l'état de la scène.
+window.__obsidianGalaxy = {
+  get renderer() { return renderer; },
+  get objects() { return currentObjects; },
+  get node() { return currentNode; },
+  get stack() { return navigationStack; },
+  get labels() { return labels; },
+};
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', init);

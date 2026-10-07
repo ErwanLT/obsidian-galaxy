@@ -8,12 +8,6 @@ import * as THREE from 'three';
 import { VisualType } from './universe.js';
 
 export const COLORS = {
-  supercluster: [0x4C1D95, 0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8B5CF6, 0xA78BFA],
-  cluster:      [0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8E3BFF, 0x8B5CF6, 0x9D6BFA],
-  galaxy:       [0x7C3AED, 0x8B5CF6, 0xA78BFA, 0x6D28D9, 0x5B21B6, 0x4C1D95],
-  // Étoiles = teintes stellaires réalistes : blanc chaud → jaune → orange →
-  // rouge. Pas de bleu : un soleil bleu n'existe que dans la SF.
-  star:         [0xFFE9A8, 0xFFD25C, 0xFFB84D, 0xFF9A3C, 0xFF8A3C, 0xFFD9A0],
   planet:       [0xF59E0B, 0xEF4444, 0x10B981, 0xF97316, 0xEC4899, 0x84CC16],
   // Teintes pâles glacées pour les planètes naines.
   dwarfPlanet:  [0xE5E7EB, 0xD8E3F0, 0xF3E8FF, 0xE0F2FE, 0xCBD5E1, 0xA7F3D0],
@@ -22,6 +16,32 @@ export const COLORS = {
   // Teintes vertes : cohérentes avec la pastille « Lune / Note » de la légende.
   moon:         [0x34D399, 0x10B981, 0x6EE7B7, 0x059669, 0x2DD4BF, 0x14B8A6],
 };
+
+/**
+ * Couleur d'un corps noir à la température T (K) — approximation de Tanner Helland.
+ * 3 000 K : naine rouge, 5 800 K : Soleil, 10 000 K : étoile blanc-bleu.
+ */
+export function kelvinColor(T) {
+  const t = T / 100;
+  let r, g, b;
+  if (t <= 66) {
+    r = 255;
+    g = 99.47 * Math.log(t) - 161.12;
+    b = t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.04;
+  } else {
+    r = 329.7 * Math.pow(t - 60, -0.1332);
+    g = 288.12 * Math.pow(t - 60, -0.0755);
+    b = 255;
+  }
+  const c = v => Math.max(0, Math.min(255, v)) / 255;
+  return new THREE.Color(c(r), c(g), c(b));
+}
+
+/** Plus un dossier est riche, plus son étoile est chaude (de naine rouge à étoile blanche). */
+export function starTemperature(node) {
+  const k = Math.min(1, Math.log10(1 + (node.markdownCount || 0)) / 2.2);
+  return 3300 + k * 6200;
+}
 
 function pickColor(arr, idx) {
   return arr[idx % arr.length];
@@ -105,6 +125,7 @@ function glowTexture() {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   _glowTex = new THREE.CanvasTexture(c);
+  _glowTex.userData.shared = true;
   return _glowTex;
 }
 
@@ -136,16 +157,15 @@ function addGlow(group, color, radius, opacity) {
  */
 export function createGalaxy(scene, node, position, index, opts = {}) {
   const sizeMul = opts.sizeMul ?? 1;
-  const colorKey = opts.colorKey ?? 'galaxy';
   const type = opts.type ?? 'galaxy';
 
   const group = new THREE.Group();
   group.position.copy(position);
   group.userData = { node, type, index };
 
-  const color = pickColor(COLORS[colorKey], index);
+  const rnd = seededRandom(nodeSeed(node, 'galaxy:'));
   const radius = galaxyRadius(node) * sizeMul;   // rayon du disque
-  const bulge = radius * 0.22;
+  const bulge = radius * 0.2;
   group.userData.visualRadius = radius;
 
   // Cible de clic : sphère transparente couvrant le disque. Sans elle il
@@ -157,87 +177,79 @@ export function createGalaxy(scene, node, position, index, opts = {}) {
   hit.userData = { isCore: true };
   group.add(hit);
 
-  // Bulbe central
-  const core = new THREE.Mesh(
-    new THREE.SphereGeometry(bulge * 0.7, 24, 24),
-    new THREE.MeshBasicMaterial({ color: 0xF5E9FF }),
-  );
-  group.add(core);
+  // Inclinaison propre à chaque galaxie (on ne les voit pas toutes de face) ;
+  // la rotation du disque se fait autour de son propre axe, dans `spin`.
+  const tilt = new THREE.Group();
+  tilt.rotation.set((rnd() - 0.5) * 0.9, 0, (rnd() - 0.5) * 0.9);
+  const spin = new THREE.Group();
+  tilt.add(spin);
+  group.add(tilt);
+  group.userData.spin = spin;
 
-  addGlow(group, 0xFFFFFF, bulge * 2.2, 0.85);   // éclat du noyau
-  addGlow(group, color, radius * 0.9, 0.35);      // lueur diffuse du disque
+  // Bulbe : vieilles étoiles, jaune orangé.
+  addGlow(spin, 0xFFE2B0, bulge * 2.6, 0.9);
+  addGlow(spin, 0xFFF4E0, bulge * 1.1, 0.9);
+  addGlow(group, 0xB8C8FF, radius * 1.05, 0.12);   // halo diffus du disque
 
-  group.add(new THREE.PointLight(color, 1.4, radius * 14));
+  // Spirale logarithmique : r = a·e^(b·θ). 2 à 4 bras selon le dossier.
+  const ARMS = 2 + Math.floor(rnd() * 3);
+  const pitch = 0.22 + rnd() * 0.12;                // tan de l'angle d'ouverture
+  const armAngle = r => Math.log(Math.max(r, bulge * 0.5) / (bulge * 0.5)) / pitch;
 
-  // ── Bras spiraux (Écoulement radial fluide) ──
-  const ARMS = 2;
-  const N = Math.min(1400 + node.markdownCount * 40, 5000);
-  const pos = new Float32Array(N * 3);
-  const col = new Float32Array(N * 3);
-
-  const u0s = new Float32Array(N);
-  const radialSpeeds = new Float32Array(N);
-  const arms = new Float32Array(N);
-  const jitters = new Float32Array(N);
-  const rJitters = new Float32Array(N);
-
-  // En additif, le blanc sature très vite : on garde une teinte déjà
-  // colorée au centre, sinon tout le disque part en blanc laiteux.
-  const cHot = new THREE.Color(0xE9D5FF);                 // cœur, lavande clair
-  const cArm = new THREE.Color(color);                    // teinte de la galaxie
-  const cRim = new THREE.Color(0x0E7490);                 // périphérie, cyan sombre
+  const N = Math.min(2200 + node.markdownCount * 40, 6000);
+  const stars = { pos: [], col: [] };
+  const knots = { pos: [], col: [] };
+  const dust = { pos: [] };
+  const cBulge = new THREE.Color(0xFFD9A0);
+  const cDisc = new THREE.Color(0xF2E6D8);
+  const cYoung = new THREE.Color(0xA9C4FF);
+  const cHII = new THREE.Color(0xFF6FA8);
+  const gauss = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;
 
   for (let i = 0; i < N; i++) {
-    // u0 répartit les particules uniformément du centre vers la périphérie
-    const u0 = Math.random();
-    // Vitesse d'écoulement radial légèrement aléatoire pour le réalisme
-    const radialSpeed = 0.012 + Math.random() * 0.012;
-    const arm = i % ARMS;
-    // Les bras s'épaississent vers l'extérieur (jitter plus grand à grand u0)
-    const jitter = (Math.random() - 0.5) * (0.22 + u0 * 0.4);
-    const rJitter = (Math.random() - 0.5) * 0.12;
+    // Profil exponentiel : densité forte au centre, qui s'éteint vers le bord.
+    const r = Math.min(radius, bulge * 0.3 + (-Math.log(1 - rnd() * 0.97)) * radius * 0.28);
+    const inArm = rnd() < 0.72;
+    const arm = Math.floor(rnd() * ARMS);
+    let theta = armAngle(r) + (arm / ARMS) * Math.PI * 2;
+    theta += inArm ? gauss() * (0.18 + 0.25 * (r / radius)) : rnd() * Math.PI * 2;
+    const x = Math.cos(theta) * r;
+    const z = Math.sin(theta) * r;
+    const thick = radius * (r < bulge ? 0.12 : 0.025);
+    const y = gauss() * thick;
 
-    u0s[i] = u0;
-    radialSpeeds[i] = radialSpeed;
-    arms[i] = arm;
-    jitters[i] = jitter;
-    rJitters[i] = rJitter;
+    const k = r / radius;
+    const c = r < bulge * 1.4
+      ? cBulge.clone().lerp(cDisc, r / (bulge * 1.4))
+      : inArm ? cDisc.clone().lerp(cYoung, Math.min(1, k * 1.4)) : cDisc.clone().multiplyScalar(0.55);
+    const b = 0.55 + 0.45 * rnd();
+    stars.pos.push(x, y, z);
+    stars.col.push(c.r * b, c.g * b, c.b * b);
 
-    // Position initiale à t = 0
-    const r_base = bulge * 0.8 + u0 * radius;
-    const rr = r_base * (1 + rJitter);
-    const angle = (arm / ARMS) * Math.PI * 2 + u0 * 3.1 * Math.PI + jitter;
-
-    pos[i * 3]     = Math.cos(angle) * rr;
-    pos[i * 3 + 1] = (Math.random() - 0.5) * radius * 0.09 * (1 - u0 * 0.55);
-    pos[i * 3 + 2] = Math.sin(angle) * rr;
-
-    // Le cœur clair est confiné aux 15 % centraux
-    const c = u0 < 0.15
-      ? cHot.clone().lerp(cArm, u0 / 0.15)
-      : cArm.clone().lerp(cRim, (u0 - 0.15) / 0.85);
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    // Régions HII (formation d'étoiles) : points roses sur les bras, à mi-disque.
+    if (inArm && k > 0.3 && k < 0.9 && rnd() < 0.035) {
+      knots.pos.push(x, y, z);
+      knots.col.push(cHII.r, cHII.g, cHII.b);
+    }
+    // Bandes de poussière : le long du bord intérieur des bras.
+    if (inArm && k > 0.15 && k < 0.85 && rnd() < 0.35) {
+      const dt = theta - 0.12;
+      dust.pos.push(Math.cos(dt) * r, y * 0.5, Math.sin(dt) * r);
+    }
   }
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const disc = new THREE.Points(geo, new THREE.PointsMaterial({
-    size: 1.25, sizeAttenuation: true, vertexColors: true,
-    transparent: true, opacity: 0.7, depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  }));
-  disc.userData = {
-    isDisc: true,
-    u0s,
-    radialSpeeds,
-    arms,
-    jitters,
-    rJitters,
-    bulge,
-    radius
+  const points = (data, size, opacity, blending, colors = true) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(data.pos, 3));
+    if (colors) geo.setAttribute('color', new THREE.Float32BufferAttribute(data.col, 3));
+    return new THREE.Points(geo, new THREE.PointsMaterial({
+      size, sizeAttenuation: true, vertexColors: colors, color: colors ? 0xffffff : 0x0a0604,
+      transparent: true, opacity, depthWrite: false, blending,
+    }));
   };
-  group.add(disc);
+  spin.add(points(dust, 2.4, 0.22, THREE.NormalBlending, false));
+  spin.add(points(stars, 1.1, 0.85, THREE.AdditiveBlending));
+  if (knots.pos.length) spin.add(points(knots, 2.2, 0.9, THREE.AdditiveBlending));
 
   scene.add(group);
   return group;
@@ -248,7 +260,7 @@ export function createGalaxy(scene, node, position, index, opts = {}) {
  */
 export function createSupercluster(scene, node, position, index) {
   return createGalaxy(scene, node, position, index, {
-    sizeMul: 1.8, colorKey: 'supercluster', type: 'supercluster',
+    sizeMul: 1.8, type: 'supercluster',
   });
 }
 
@@ -257,7 +269,7 @@ export function createSupercluster(scene, node, position, index) {
  */
 export function createCluster(scene, node, position, index) {
   return createGalaxy(scene, node, position, index, {
-    sizeMul: 1.25, colorKey: 'cluster', type: 'cluster',
+    sizeMul: 1.25, type: 'cluster',
   });
 }
 
@@ -302,6 +314,7 @@ function starSpikeTexture() {
   spike(Math.PI / 2);
 
   _starSpikeTex = new THREE.CanvasTexture(c);
+  _starSpikeTex.userData.shared = true;
   return _starSpikeTex;
 }
 
@@ -316,7 +329,7 @@ function createCompactStar(scene, node, position, index) {
   group.position.copy(position);
   group.userData = { node, type: 'star', index };
 
-  const color = pickColor(COLORS.star, index);
+  const color = kelvinColor(starTemperature(node));
   const size = 2.5 + Math.min(node.markdownCount * 0.15, 3.5);
   group.userData.visualRadius = compactStarRadius(node);
 
@@ -351,7 +364,7 @@ export function createStar(scene, node, position, index) {
   group.position.copy(position);
   group.userData = { node, type: 'star', index };
 
-  const color = pickColor(COLORS.star, index);
+  const color = kelvinColor(starTemperature(node));
   const size = 8 + Math.min(node.markdownCount * 0.3, 12);
   group.userData.visualRadius = starRadius(node);   // couronne + lueur
 
@@ -423,10 +436,11 @@ export function createStar(scene, node, position, index) {
         // Granulation : taches chaudes vs pores sombres
         float spot = smoothstep(0.40, 0.72, n);
 
-        // Palette plasma : rouge profond → orange → jaune chauffé
-        vec3 deep = vec3(0.55, 0.12, 0.02);
-        vec3 mid  = vec3(1.00, 0.45, 0.05);
-        vec3 hot  = vec3(1.00, 0.86, 0.42);
+        // Palette plasma dérivée de la température de l'étoile : une naine rouge
+        // bout en rouge sombre, une étoile chaude en blanc bleuté.
+        vec3 deep = uColor * vec3(0.55, 0.30, 0.20);
+        vec3 mid  = uColor * 0.95;
+        vec3 hot  = mix(uColor, vec3(1.0), 0.6);
 
         vec3 col = mix(deep, mid, spot);
         col = mix(col, hot, smoothstep(0.55, 0.92, n) * 0.85);
@@ -451,25 +465,29 @@ export function createStar(scene, node, position, index) {
   core.userData = { isCore: true, isSun: true };
   group.add(core);
 
-  // ── Couronne volumique ──
-  // Sphère BackSide additive : anneau lumineux irrégulier qui scintille grâce
-  // au bruit, densité plus forte près du disque, filaments vers l'extérieur.
+  // ── Couronne diffuse ──
+  // Sphère BackSide additive. La lueur ne dépend pas de l'angle de la surface
+  // (ce qui dessinait une « bulle » au contour net) mais de la distance entre
+  // le rayon de vue et le centre du soleil : forte au ras du disque, nulle
+  // avant le bord de la sphère — aucune frontière visible.
+  const CORONA_SCALE = 2.4;
   const coronaMat = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
       uColor: { value: new THREE.Color(color) },
       uSize: { value: size },
+      uOuter: { value: size * CORONA_SCALE },
     },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     side: THREE.BackSide,
     vertexShader: `
-      varying vec3 vN;
       varying vec3 vWorld;
+      varying vec3 vCenter;
       void main() {
-        vN = normalize(mat3(modelMatrix) * normal);
         vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+        vCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
@@ -477,8 +495,9 @@ export function createStar(scene, node, position, index) {
       uniform float uTime;
       uniform vec3 uColor;
       uniform float uSize;
-      varying vec3 vN;
+      uniform float uOuter;
       varying vec3 vWorld;
+      varying vec3 vCenter;
 
       float hash(vec3 p) {
         p = fract(p * 0.3183099 + 0.1);
@@ -508,21 +527,24 @@ export function createStar(scene, node, position, index) {
       }
 
       void main() {
-        vec3 viewDir = normalize(cameraPosition - vWorld);
-        float fres = pow(1.0 - abs(dot(normalize(vN), viewDir)), 1.6);
+        // Distance minimale entre le rayon de vue et le centre du soleil.
+        vec3 dir = normalize(vWorld - cameraPosition);
+        float d = length(cross(vCenter - cameraPosition, dir));
+        float t = clamp((d - uSize) / (uOuter - uSize), 0.0, 1.0);
+        float fall = pow(1.0 - t, 3.2);
 
-        float n = fbm(vWorld / (uSize * 0.42) + vec3(uTime * 0.03, uTime * 0.02, 0.0));
-        // Filaments radiaux : plus fins vers l'extérieur
-        float filaments = fbm(normalize(vWorld) * 3.0 + uTime * 0.05 + n);
-        float glow = fres * (0.35 + 0.7 * n) * (0.6 + 0.6 * filaments);
+        float n = fbm((vWorld - vCenter) / (uSize * 0.42) + vec3(uTime * 0.03, uTime * 0.02, 0.0));
+        // Filaments radiaux, discrets
+        float filaments = fbm(normalize(vWorld - vCenter) * 3.0 + uTime * 0.05 + n);
+        float glow = fall * (0.55 + 0.45 * n) * (0.75 + 0.35 * filaments);
 
-        gl_FragColor = vec4(uColor * glow * 2.2, glow * 0.85);
+        gl_FragColor = vec4(uColor * glow * 1.5, glow * 0.55);
       }
     `,
   });
   sunUniforms.push(coronaMat.uniforms.uTime);
 
-  const corona = new THREE.Mesh(new THREE.SphereGeometry(size * 2.4, 32, 32), coronaMat);
+  const corona = new THREE.Mesh(new THREE.SphereGeometry(size * CORONA_SCALE, 48, 48), coronaMat);
   group.add(corona);
 
   // ── Protubérances / éruptions solaires ──
@@ -620,12 +642,21 @@ export function createStar(scene, node, position, index) {
   // Lueur diffuse en sprite derrière la couronne : donne de la profondeur.
   addGlow(group, color, size * 2.2, 0.45);
 
-  // Disque protoplanétaire : anneau fin et lumineux
+  // Disque protoplanétaire : voile de poussière diffus, fondu aux deux bords.
+  // (Un anneau plat et uniforme se lisait comme un trait blanc net.)
+  const dIn = size * 1.35;
+  const dOut = size * 2.7;
+  const discGeo = new THREE.RingGeometry(dIn, dOut, 128, 1);
+  const duv = discGeo.attributes.uv;
+  const dpos = discGeo.attributes.position;
+  for (let k = 0; k < duv.count; k++) {
+    duv.setXY(k, (Math.hypot(dpos.getX(k), dpos.getY(k)) - dIn) / (dOut - dIn), 0.5);
+  }
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(size * 1.55, size * 1.95, 96),
+    discGeo,
     new THREE.MeshBasicMaterial({
-      color, side: THREE.DoubleSide,
-      transparent: true, opacity: 0.7, depthWrite: false,
+      color, map: _makeDiscTexture(), side: THREE.DoubleSide,
+      transparent: true, opacity: 0.28, depthWrite: false,
       blending: THREE.AdditiveBlending,
     }),
   );
@@ -633,7 +664,10 @@ export function createStar(scene, node, position, index) {
   group.add(ring);
 
   // Vraie source de lumière : la scène est éclairée par l'étoile.
-  group.add(new THREE.PointLight(color, 1.4, size * 18));
+  // Lumière solaire : sans atténuation (à l'échelle d'un système, la chute en 1/r²
+  // rendrait les planètes externes noires), légèrement plus blanche que le disque.
+  const sunlight = new THREE.PointLight(color.clone().lerp(new THREE.Color(0xffffff), 0.55), 1.7, 0, 0);
+  group.add(sunlight);
 
   scene.add(group);
   return group;
@@ -641,7 +675,7 @@ export function createStar(scene, node, position, index) {
 
 // ─── Planètes uniques : textures procédurales seedées ────────────────────────
 // Chaque planète reçoit une surface générée à partir d'un seed stable
-// (dérivé du nom + index) : deux planètes ne se ressemblent jamais, sans
+// (dérivé du chemin du nœud) : deux planètes ne se ressemblent jamais, sans
 // aucun asset externe.
 
 function _lerp(a, b, t) { return a + (b - a) * t; }
@@ -672,6 +706,46 @@ function _fbm(x, y, oct, s) {
   return v;
 }
 
+// Générateur pseudo-aléatoire seedé : un astre garde le même aspect à chaque visite.
+export function seededRandom(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function nodeSeed(node, salt = '') {
+  return _hashName(`${salt}${node.path || node.name}`) || 1;
+}
+
+const TEXTURE_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'bumpMap'];
+
+/**
+ * Libère la mémoire GPU d'un objet et de ses descendants (géométries, matériaux,
+ * textures générées). Les textures partagées entre astres sont conservées.
+ */
+export function disposeTree(root) {
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) {
+      for (const slot of TEXTURE_SLOTS) {
+        const tex = m[slot];
+        if (tex && !tex.userData?.shared) tex.dispose();
+      }
+      if (m.uniforms) {
+        for (const u of Object.values(m.uniforms)) {
+          if (u?.value?.isTexture && !u.value.userData?.shared) u.value.dispose();
+        }
+      }
+      m.dispose();
+    }
+  });
+}
+
 function _hashName(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -700,6 +774,19 @@ const ARCHETYPE_ATMO = {
   ice:       new THREE.Color(0xC9E8F2),
   volcanic:  new THREE.Color(0xF9A15C),
 };
+
+/**
+ * Rend raccordable horizontalement une fonction de texture f(lon) : sur le
+ * dernier quart, on fond f(lon) vers f(lon − 2π), qui vaut exactement le bord
+ * gauche en lon = 2π. Sans ça, une couture verticale nette barre chaque astre.
+ */
+function _seamless(lon, f) {
+  const w = _ss(lon / (Math.PI * 2), 0.75, 1);
+  if (w <= 0) return f(lon);
+  const a = f(lon);
+  const b = f(lon - Math.PI * 2);
+  return Array.isArray(a) ? a.map((v, k) => v + (b[k] - v) * w) : a + (b - a) * w;
+}
 
 // Lissage doux (smoothstep) : contraste net mais sans aliasing.
 function _ss(t, a, b) {
@@ -782,7 +869,7 @@ function _makePlanetTexture(seed, archetype) {
     const lat = (y / H) * Math.PI - Math.PI / 2;
     for (let x = 0; x < W; x++) {
       const lon = (x / W) * Math.PI * 2;
-      const px = _planetPixel(lon, lat, x, y, seed, archetype);
+      const px = _seamless(lon, l => _planetPixel(l, lat, x, y, seed, archetype));
       const i = (y * W + x) * 4;
       data[i] = px[0]; data[i + 1] = px[1]; data[i + 2] = px[2]; data[i + 3] = 255;
     }
@@ -795,7 +882,7 @@ function _makePlanetTexture(seed, archetype) {
 
 /** Couche de nuages : alpha blanc là où le bruit dépasse le seuil. */
 function _makeCloudTexture(seed) {
-  const W = 128, H = 64;
+  const W = 256, H = 128;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -804,8 +891,9 @@ function _makeCloudTexture(seed) {
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const u = x / W, v = y / H;
-      const n = _fbm(u * 4 + seed * 0.01, v * 6 + 3, 4, seed * 1.1);
-      const a = n > 0.58 ? Math.floor(((n - 0.58) / 0.42) * 235 + 20) : 0;
+      const n = _seamless(u * Math.PI * 2, l => _fbm((l / (Math.PI * 2)) * 4 + seed * 0.01, v * 6 + 3, 4, seed * 1.1));
+      // Bords doux : un seuil franc donnait des nuages en blocs rectangulaires.
+      const a = Math.floor(_ss(n, 0.52, 0.72) * 230);
       const i = (y * W + x) * 4;
       data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = a;
     }
@@ -843,7 +931,11 @@ function makeAtmosphere(size, atmoColor) {
       void main() {
         vec3 viewDir = normalize(cameraPosition - vWorld);
         float fres = pow(1.0 - abs(dot(normalize(vN), viewDir)), 2.6);
-        gl_FragColor = vec4(uColor * fres * 1.8, fres * 0.85);
+        // L'atmosphère ne diffuse que la lumière reçue : le soleil du système
+        // est à l'origine, la face nuit ne garde qu'un liseré très ténu.
+        float day = smoothstep(-0.25, 0.35, dot(normalize(vN), normalize(-vWorld)));
+        float k = fres * (0.08 + 0.92 * day);
+        gl_FragColor = vec4(uColor * k * 1.8, k * 0.85);
       }
     `,
   });
@@ -864,7 +956,8 @@ export function createPlanet(scene, node, position, index) {
   const size = 4 + Math.min(node.markdownCount * 0.5, 8);
   group.userData.visualRadius = planetRadius(node);   // atmosphère + anneau éventuel
 
-  const seed = (_hashName(`${node.name}#${index}`) || 1) >>> 0;
+  const seed = nodeSeed(node);
+  const rnd = seededRandom(seed ^ 0x51ed27);
   const archetype = PLANET_ARCHETYPES[seed % PLANET_ARCHETYPES.length];
   const baseColor = ARCHETYPE_COLOR[archetype];
 
@@ -877,30 +970,33 @@ export function createPlanet(scene, node, position, index) {
     map: tex,
     emissiveMap: tex,
     emissive: 0xffffff,
-    emissiveIntensity: 0.55,
+    // Émission minime : la face nuit reste devinable, c'est le soleil qui éclaire.
+    emissiveIntensity: 0.05,
     roughness: 0.8,
     metalness: 0.0,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
   // Obliquité axiale : l'axe de rotation est incliné (comme sur Terre)
-  mesh.rotation.z = (Math.random() - 0.5) * 1.2;
-  mesh.rotation.x = (Math.random() - 0.5) * 0.5;
+  mesh.rotation.z = (rnd() - 0.5) * 1.2;
+  mesh.rotation.x = (rnd() - 0.5) * 0.5;
   group.add(mesh);
 
   // Nuages qui dérivent (rocheuses et océans surtout, gazeuses un peu)
   const cloudChance = archetype === 'gas' ? 0.45 : 0.85;
-  if (Math.random() < cloudChance) {
+  if (rnd() < cloudChance) {
     const cloudTex = _makeCloudTexture(seed ^ 0x9E3779B9);
     const cloud = new THREE.Mesh(
       new THREE.SphereGeometry(size * 1.03, 28, 28),
-      new THREE.MeshBasicMaterial({
-        map: cloudTex, transparent: true, opacity: 0.6, depthWrite: false,
+      // Matériau éclairé : les nuages ne doivent pas briller sur la face nuit.
+      new THREE.MeshStandardMaterial({
+        map: cloudTex, transparent: true, opacity: 0.75, depthWrite: false,
+        roughness: 1, metalness: 0,
       }),
     );
     cloud.rotation.set(mesh.rotation.x, mesh.rotation.z, 0);
     group.add(cloud);
-    group.userData.cloudSpin = 0.012 + Math.random() * 0.02;
+    group.userData.cloudSpin = 0.012 + rnd() * 0.02;
     group.userData.cloudSkin = cloud;
   }
 
@@ -912,24 +1008,81 @@ export function createPlanet(scene, node, position, index) {
 
   // Anneaux : fréquents sur gazeuses/glace, rares ailleurs
   const ringish = archetype === 'gas' || archetype === 'ice';
-  if ((ringish && Math.random() < 0.85) || (!ringish && Math.random() < 0.22)) {
-    const rIn = size * (1.35 + Math.random() * 0.22);
-    const rOut = rIn * (1.4 + Math.random() * 0.5);
-    const rColor = baseColor.clone().offsetHSL(Math.random() * 0.1 - 0.05, 0, 0.05);
+  if (rnd() < (ringish ? 0.85 : 0.22)) {
+    const rIn = size * (1.35 + rnd() * 0.22);
+    const rOut = rIn * (1.4 + rnd() * 0.5);
+    const rColor = baseColor.clone().offsetHSL(rnd() * 0.1 - 0.05, 0, 0.05);
+    const ringGeo = new THREE.RingGeometry(rIn, rOut, 96, 1);
+    // UV radiales : u = 0 au bord interne, 1 au bord externe, pour y poser les bandes.
+    const uv = ringGeo.attributes.uv;
+    const p = ringGeo.attributes.position;
+    for (let k = 0; k < uv.count; k++) {
+      const d = Math.hypot(p.getX(k), p.getY(k));
+      uv.setXY(k, (d - rIn) / (rOut - rIn), 0.5);
+    }
+    const bands = _makeRingTexture(seed ^ 0x2545F491);
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(rIn, rOut, 64),
-      new THREE.MeshBasicMaterial({
-        color: rColor, side: THREE.DoubleSide,
-        transparent: true, opacity: 0.3 + Math.random() * 0.3,
-        depthWrite: false, blending: THREE.AdditiveBlending,
+      ringGeo,
+      new THREE.MeshStandardMaterial({
+        color: rColor, map: bands, alphaMap: bands, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.55 + rnd() * 0.3,
+        depthWrite: false, roughness: 1, metalness: 0,
+        emissive: rColor, emissiveIntensity: 0.04,
       }),
     );
-    ring.rotation.x = Math.PI / 2 - (Math.random() - 0.5) * 0.35;
+    ring.rotation.x = Math.PI / 2 - (rnd() - 0.5) * 0.35;
     group.add(ring);
   }
 
   scene.add(group);
   return group;
+}
+
+/** Profil du disque protoplanétaire : bosse douce, bandes de poussière légères. */
+let _discTex = null;
+function _makeDiscTexture() {
+  if (_discTex) return _discTex;
+  const W = 256;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = 1;
+  const ctx = c.getContext('2d');
+  for (let x = 0; x < W; x++) {
+    const u = x / (W - 1);
+    const hump = Math.exp(-Math.pow((u - 0.35) / 0.28, 2));        // densité max côté intérieur
+    const bands = 0.8 + 0.2 * Math.sin(u * 42) * Math.sin(u * 13);  // stries discrètes
+    const v = Math.round(255 * hump * bands * _ss(u, 0, 0.18) * (1 - _ss(u, 0.75, 1)));
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(x, 0, 1, 1);
+  }
+  _discTex = new THREE.CanvasTexture(c);
+  _discTex.colorSpace = THREE.SRGBColorSpace;
+  _discTex.userData.shared = true;
+  return _discTex;
+}
+
+/** Bandes d'anneau (façon Saturne) : densité variable, divisions sombres. */
+function _makeRingTexture(seed) {
+  const W = 256;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = 1;
+  const ctx = c.getContext('2d');
+  const rnd = seededRandom(seed);
+  const gaps = [0.3 + rnd() * 0.15, 0.62 + rnd() * 0.15];
+  for (let x = 0; x < W; x++) {
+    const u = x / (W - 1);
+    let d = 0.55 + 0.45 * Math.sin(u * 37 + rnd() * 0.4) * Math.sin(u * 11.3);
+    d = 0.35 + 0.65 * Math.abs(d);
+    for (const g of gaps) d *= Math.min(1, Math.abs(u - g) * 28);
+    d *= Math.min(1, u * 8) * Math.min(1, (1 - u) * 6);   // bords adoucis
+    const v = Math.round(255 * Math.max(0, Math.min(1, d)));
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.fillRect(x, 0, 1, 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 /**
@@ -950,7 +1103,7 @@ export function createDwarfPlanet(scene, node, position, index) {
     roughness: 0.9,
     metalness: 0.0,
     emissive: color,
-    emissiveIntensity: 0.12,
+    emissiveIntensity: 0.04,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
@@ -1024,7 +1177,7 @@ function _makeMoonTexture(seed) {
     const lat = (y / H) * Math.PI - Math.PI / 2;
     for (let x = 0; x < W; x++) {
       const lon = (x / W) * Math.PI * 2;
-      const px = _moonPixel(lon, lat, seed);
+      const px = _seamless(lon, l => _moonPixel(l, lat, seed));
       const i = (y * W + x) * 4;
       data[i] = px[0]; data[i + 1] = px[1]; data[i + 2] = px[2]; data[i + 3] = 255;
     }
@@ -1051,8 +1204,11 @@ export function createMoon(scene, node, position, index) {
 
   group.userData.visualRadius = moonRadius(node);   // halo compris
 
-  const seed = (_hashName(`${node.name}#${index}`) || 1) >>> 0;
-  const color = pickColor(COLORS.moon, index);   // accent du halo
+  const seed = nodeSeed(node);
+  // Halo selon la rareté (taille relative de la note dans le vault).
+  const color = RARITY_GLOW[node.rarity] ?? pickColor(COLORS.moon, index);
+  const glowBoost = node.rarity === 'legendaire' ? 1.6 : node.rarity === 'rare' ? 1.25 : 1;
+  group.userData.coreRadius = size;
 
   const tex = _makeMoonTexture(seed);
   const geo = new THREE.SphereGeometry(size, 24, 24);
@@ -1060,22 +1216,24 @@ export function createMoon(scene, node, position, index) {
     map: tex,
     emissiveMap: tex,
     emissive: 0xffffff,
-    emissiveIntensity: 0.5,
+    emissiveIntensity: 0.07,
     roughness: 0.9,
     metalness: 0.0,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
-  mesh.rotation.z = (Math.random() - 0.5) * 1.9;
+  mesh.rotation.z = ((seed % 1000) / 1000 - 0.5) * 1.9;
   group.add(mesh);
 
   // Lueur discrète : les lunes sont minuscules, sans elle elles
   // disparaissent contre le fond étoilé.
-  addGlow(group, color, size * 3, 0.5);
+  addGlow(group, color, size * 3 * glowBoost, 0.5 * glowBoost);
 
   scene.add(group);
   return group;
 }
+
+const RARITY_GLOW = { rare: 0x60A5FA, legendaire: 0xC084FC };
 
 /**
  * Create an orbit trail ellipse for orbital mechanics feel.
@@ -1120,60 +1278,6 @@ export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, o
   orbit.position.copy(center);
   scene.add(orbit);
   return orbit;
-}
-
-/**
- * Create a glowing label sprite
- */
-export function createLabel(text, position, color = '#ffffff', fontSize = 48, width = 30) {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-
-  // Mesurer le texte pour adapter la taille du canvas
-  ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
-  const textWidth = ctx.measureText(text).width;
-
-  // Marge pour éviter que les bords soient coupés (contour)
-  const padding = 24;
-  const canvasWidth = Math.max(512, Math.ceil(textWidth + padding));
-  const canvasHeight = 128;
-
-  canvas.width = canvasWidth;
-  canvas.height = canvasHeight;
-
-  // Réinitialiser le contexte car changer width le remet à zéro
-  ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  const cx = canvasWidth / 2;
-  const cy = canvasHeight / 2;
-
-  // 1. Draw a dark semi-transparent outline first for contrast
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-  ctx.lineWidth = 10;
-  ctx.strokeText(text, cx, cy);
-
-  // 2. Fill the text on top
-  ctx.fillStyle = color;
-  ctx.fillText(text, cx, cy);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false,
-  });
-  const sprite = new THREE.Sprite(mat);
-  sprite.position.copy(position);
-
-  // Conserver le ratio du canvas pour ne pas déformer le texte
-  const spriteHeight = width / 4;
-  const spriteWidth = spriteHeight * (canvasWidth / canvasHeight);
-  sprite.scale.set(spriteWidth, spriteHeight, 1);
-  return sprite;
 }
 
 /**
