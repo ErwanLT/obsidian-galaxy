@@ -161,3 +161,18 @@ describe('chemin entre deux notes', async () => {
     expect(shortestPath(a, iso)).toEqual([]);
   });
 });
+
+describe('mini-carte', async () => {
+  const { radialLayout } = await import('../src/minimap.js');
+  it('place chaque dossier, la racine au centre, plus loin à chaque niveau', () => {
+    const v = demoUniverse();
+    const pos = radialLayout(v);
+    const dirs = [];
+    const walk = n => { if (n.type !== 'MARKDOWN_FILE') { dirs.push(n); (n.children || []).forEach(walk); } };
+    walk(v);
+    expect(pos.size).toBe(dirs.length);
+    const dist = n => Math.hypot(pos.get(n).x - 84, pos.get(n).y - 84);
+    expect(dist(v)).toBe(0);
+    for (const n of dirs) if (n._parent && n._parent !== v) expect(dist(n)).toBeGreaterThan(dist(n._parent));
+  });
+});
