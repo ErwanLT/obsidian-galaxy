@@ -111,7 +111,8 @@ public class UniverseService {
                         null,
                         words,
                         created,
-                        modified
+                        modified,
+                        Map.of()
                 );
             }
 
@@ -134,7 +135,8 @@ public class UniverseService {
                         parsed.excerpt(),
                         parsed.words(),
                         attrs.creationTime().toMillis(),
-                        attrs.lastModifiedTime().toMillis()
+                        attrs.lastModifiedTime().toMillis(),
+                        parsed.properties()
                 );
             }
             return null;

@@ -10,7 +10,8 @@ import java.util.regex.Pattern;
 
 /**
  * Analyse le contenu d'une note Markdown (format Obsidian) : liens wiki,
- * tags (frontmatter et #tags dans le texte), extrait lisible et nombre de mots.
+ * tags (frontmatter et #tags dans le texte), extrait lisible, nombre de mots
+ * et propriétés simples du frontmatter.
  * Sans état et sans accès disque : testable directement sur une chaîne.
  */
 public final class NoteParser {
@@ -31,11 +32,14 @@ public final class NoteParser {
     private static final Pattern RULE = Pattern.compile("(?m)^\\s*([-*_]\\s*){3,}$");
     private static final Pattern TABLE_PIPES = Pattern.compile("\\|");
     private static final Pattern SPACES = Pattern.compile("\\s+");
+    // « clé: valeur » sur une ligne, hors listes : title, published_at, status, source_url…
+    private static final Pattern SCALAR = Pattern.compile("^([A-Za-z_][\\w-]*):\\s*([^\\s\\[{].*?)\\s*$");
 
     private NoteParser() {
     }
 
-    public record ParsedNote(List<String> linkTargets, List<String> tags, String excerpt, long words) {
+    public record ParsedNote(List<String> linkTargets, List<String> tags, String excerpt, long words,
+                             Map<String, String> properties) {
     }
 
     public static ParsedNote parse(String content) {
@@ -65,7 +69,7 @@ public final class NoteParser {
         // Le code en ligne garde son texte dans l'extrait (« avec @Async, offre… »).
         String plain = plainText(withoutFences);
         long words = plain.isBlank() ? 0 : SPACES.split(plain.trim()).length;
-        return new ParsedNote(List.copyOf(targets), List.copyOf(tags.values()), excerpt(plain), words);
+        return new ParsedNote(List.copyOf(targets), List.copyOf(tags.values()), excerpt(plain), words, fm.properties());
     }
 
     private static void addTag(Map<String, String> tags, String raw) {
@@ -114,7 +118,7 @@ public final class NoteParser {
         return plain.substring(0, cut).replaceAll("[\\s,;:.!?–-]+$", "") + "…";
     }
 
-    record Frontmatter(List<String> tags, String body) {
+    record Frontmatter(List<String> tags, Map<String, String> properties, String body) {
     }
 
     /**
@@ -124,22 +128,27 @@ public final class NoteParser {
      */
     static Frontmatter splitFrontmatter(String text) {
         if (!text.startsWith("---\n")) {
-            return new Frontmatter(List.of(), text);
+            return new Frontmatter(List.of(), Map.of(), text);
         }
         int end = text.indexOf("\n---", 4);
         if (end < 0) {
-            return new Frontmatter(List.of(), text);
+            return new Frontmatter(List.of(), Map.of(), text);
         }
         String yaml = text.substring(4, end);
         int bodyStart = text.indexOf('\n', end + 4);
         String body = bodyStart < 0 ? "" : text.substring(bodyStart + 1);
 
         List<String> tags = new ArrayList<>();
+        Map<String, String> properties = new LinkedHashMap<>();
         String[] lines = yaml.split("\n");
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             String lower = line.toLowerCase(Locale.ROOT);
             if (!(lower.startsWith("tags:") || lower.startsWith("tag:"))) {
+                Matcher scalar = SCALAR.matcher(line);
+                if (scalar.matches()) {
+                    properties.putIfAbsent(scalar.group(1), scalar.group(2).trim().replaceAll("^\"(.*)\"$|^'(.*)'$", "$1$2").replace("\\\"", "\""));
+                }
                 continue;
             }
             String value = line.substring(line.indexOf(':') + 1).trim();
@@ -161,6 +170,6 @@ public final class NoteParser {
                 }
             }
         }
-        return new Frontmatter(tags, body);
+        return new Frontmatter(tags, Map.copyOf(properties), body);
     }
 }

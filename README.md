@@ -26,6 +26,7 @@ Le projet est divisé en deux modules distincts :
 1. **[obsidian-back](./obsidian-back/)** : API REST développée en **Java / Spring Boot** qui scanne votre Vault Obsidian en local et génère un arbre de données hiérarchisé de type `Universe`.
 2. **[obsidian-front](./obsidian-front/)** : Application web développée en **Vite + Vanilla JS + Three.js** pour la scène de rendu 3D interactive, les contrôles orbitaux fluides et l'interface utilisateur (HUD).
 3. **[obsidian-rpg-front](./obsidian-rpg-front/)** : Explorateur rétro **8-bit** développé en **Vite + Vanilla JS (Canvas 2D)** qui transforme le Vault en donjon d'exploration : chaque dossier devient une salle, chaque note un parchemin à collecter, chaque sous-dossier une porte.
+4. **[obsidian-carottage-front](./obsidian-carottage-front/)** : Le Vault vu comme une **carotte de sédiments** (**Vite + Vanilla JS + SVG**) : chaque note est une strate déposée à sa date de publication, épaisse de ses mots, et les liens sont des veines entre les couches.
 
 ---
 
@@ -119,6 +120,25 @@ npm run dev
 ```
 
 👉 **[http://localhost:5173](http://localhost:5173)** (port libre : `npm run dev -- --port 5175`)
+
+---
+
+## 🪨 Carottage (`obsidian-carottage-front`)
+
+Une coupe géologique du Vault, rangée en tronçons comme dans une caisse de carottier :
+
+- **Chaque note = une strate**, déposée à sa date de publication (`published_at` du frontmatter) : la surface est la note la plus récente, le fond la plus ancienne. **Épaisseur = nombre de mots** (1 mot = 1 mm).
+- **Couleur et figuré = dossier** (lithologie) ; les dossiers dominants sont découpés en sous-dossiers, les plus rares regroupés en « divers ».
+- **Sédiments meubles** en surface : les brouillons (`status: Draft`). **Socle** au fond : les notes sans date.
+- **Lacunes** (trait rouge en dents de scie) : plus de deux mois sans publication. **Fossiles directeurs** (ammonites) : les notes les plus citées.
+- Survol : **veines** vers les notes citées (trait plein) et citantes (pointillé). Clic : **fiche d'échantillon** (date, profondeur, tags, extrait, liens, ouverture dans Obsidian ou en ligne via `source_url`).
+- Filtre (`/`) : mots du titre, `#tag`, `dossier:Back/Java` ; `↑`/`↓` pour passer d'une couche à l'autre.
+
+```bash
+cd obsidian-carottage-front
+npm install
+npm run dev
+```
 
 ---
 

@@ -53,4 +53,16 @@ class NoteParserTest {
         assertThat(NoteParser.parse(md).linkTargets())
                 .containsExactly("Dans le frontmatter", "Cible", "Dossier/Autre", "Encore");
     }
+
+    @Test
+    void proprietesSimplesDuFrontmatter() {
+        String md = "---\ntitle: \"La Carte : \\\"Whale\\\"\"\npublished_at: 2026-03-15\nstatus: 'Published'\n"
+                + "vide:\ntags: [a]\naliases:\n  - x\nsfeir_tags: [\"b\"]\n---\ncorps";
+        assertThat(NoteParser.parse(md).properties())
+                .containsEntry("title", "La Carte : \"Whale\"")
+                .containsEntry("published_at", "2026-03-15")
+                .containsEntry("status", "Published")
+                .doesNotContainKeys("vide", "tags", "aliases", "sfeir_tags");
+        assertThat(NoteParser.parse("pas de frontmatter").properties()).isEmpty();
+    }
 }
