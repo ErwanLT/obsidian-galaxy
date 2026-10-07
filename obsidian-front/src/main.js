@@ -110,91 +110,54 @@ function discLayout(n) {
 }
 
 /**
- * Layout orbital — anneaux concentriques dimensionnés par la taille des astres
- * et par l'inclinaison des plans orbitaux.
+ * Layout orbital minimaliste : UN astre par rayon, jamais de partage d'anneau.
  *
- * Chaque anneau est posé à plat, puis reçoit UN seul plan orbital incliné
- * (`planes[placed]`) : l'anneau tourne « en bloc » sur son disque basculé et la
- * géométrie intra-anneau reste donc exacte (corde entre voisins ≥ somme des
- * rayons + marge). Les anneaux successifs sont en revanche écartés d'un coup
- * (`SIN_TILT`) pour que, même basculés, leurs enveloppes verticales ne
- * s'entrecroisent pas.
+ * Chaque corps reçoit son propre rayon orbital, strictement croissant : le
+ * rayon suivant commence juste après l'enveloppe du corps précédent
+ * (rayon visuel + marge). Comme les ellipses décalent chaque corps sur son
+ * propre plan orbital et que les angles sont répartis uniformément, aucun
+ * objet ne peut recoller son voisin : c'est la garantie « un objet par rayon ».
+ *
+ * `sizes` = rayons visuels de chaque corps (servent à l'espacement) ; les plus
+ * gros sont placés au plus près de l'astre central.
  */
-const SIN_TILT = 0.25;   // sin(inclinaison max) — enveloppe verticale d'un plan
-
 function orbitLayout(n, minR, maxR, sizes = []) {
   const positions = new Array(n);
   const planes = new Array(n);
   if (n === 0) return { positions, planes };
 
-  const pad = 8;      // marge libre entre deux astres voisins
-  const ringCap = 7;  // nombre max d'astres par anneau
+  // Les plus gros au centre (l'index original est préservé via `order`).
+  const order = sizes
+    .map((vr, i) => ({ vr: vr || 8, i }))
+    .sort((a, b) => b.vr - a.vr);
 
-  if (n === 1) {
-    positions[0] = new THREE.Vector3(minR, 0, 0);
-    planes[0] = { incl: 0, omega: 0 };
-    return { positions, planes };
-  }
+  const offset = Math.random() * Math.PI * 2;
+  let prevEdge = minR;
 
-  const maxOf = arr => arr.reduce((a, b) => Math.max(a, b || 0), 0);
+  for (let k = 0; k < n; k++) {
+    const { vr, i } = order[k];
+    // Rayon orbital : juste après le bord externe du corps précédent + marge.
+    // Pas de clamp maxR (mettre tous les corps sur un même rayon recreerait
+    // les chevauchements) ni de facteur (1-SIN_TILT) : chaque corps a SON plan
+    // orbital, les inclinaisons restent douces.
+    const center = prevEdge + vr + 8;
 
-  let placed = 0;
-  let ring = 0;
-  let prevRingR = 0;      // rayon de l'anneau précédent
-  let prevRingMax = 0;    // rMax (plus gros corps) de l'anneau précédent
+    // Angles espacés uniformément : deux rayons voisins ne sont jamais
+    // alignés sur le même axe, ça double la marge entre eux.
+    const angle = offset + (n > 1 ? (k * Math.PI * 2) / n : 0);
 
-  while (placed < n) {
-    let count = Math.min(ringCap + ring * 2, n - placed);
-    let rMax = maxOf(sizes.slice(placed, placed + count));
+    positions[i] = new THREE.Vector3(
+      Math.cos(angle) * center,
+      0,
+      Math.sin(angle) * center,
+    );
 
-    let r = Math.max(minR, rMax + pad);
-    if (count > 1) {
-      // Corde entre deux voisins (2·r·sin(π/count)) ≥ 2·rMax + pad
-      const byChord = (2 * rMax + pad) / (2 * Math.sin(Math.PI / count));
-      r = Math.max(r, byChord);
-    }
-    if (ring > 0) {
-      // L'anneau précédent bascule et remonte ses corps de ±sin(θ)·prevRingR :
-      // on décale l'anneau courant assez pour que ses corps ne frôlent jamais
-      // l'enveloppe de l'anneau intérieur.
-      r = Math.max(r, (prevRingR + prevRingMax + rMax + pad) / (1 - SIN_TILT));
-    }
-    // Pas assez de place dans le plan : on coupe l'anneau en deux pour
-    // réduire rMax et tenter un rayon plus petit.
-    for (let attempt = 0; attempt < 6 && r > maxR && count > 1; attempt++) {
-      count = Math.max(2, Math.ceil(count / 2));
-      rMax = maxOf(sizes.slice(placed, placed + count));
-      r = Math.max(minR, rMax + pad);
-      if (count > 1) {
-        const byChord = (2 * rMax + pad) / (2 * Math.sin(Math.PI / count));
-        r = Math.max(r, byChord);
-      }
-      if (ring > 0) {
-        r = Math.max(r, (prevRingR + prevRingMax + rMax + pad) / (1 - SIN_TILT));
-      }
-    }
-    r = Math.min(r, maxR);
+    planes[i] = {
+      incl: 0.06 + Math.random() * 0.10,   // pente douce, plan propre à chacun
+      omega: Math.random() * Math.PI * 2,
+    };
 
-    // UN plan orbital pour tout l'anneau : couronne rigide basculée, aucun
-    // voisin du même anneau ne se croise.
-    const incl = 0.15 + Math.random() * 0.10;   // ~9° à 14°
-    const omega = Math.random() * Math.PI * 2;
-
-    const offset = ring * 0.45;   // casse l'alignement radial entre anneaux
-    for (let i = 0; i < count; i++) {
-      const angle = offset + (i / count) * Math.PI * 2;
-      positions[placed] = new THREE.Vector3(
-        Math.cos(angle) * r,
-        i % 2 === 0 ? -0.7 : 0.7,   // léger relief vertical
-        Math.sin(angle) * r,
-      );
-      planes[placed] = { incl, omega };
-      placed++;
-    }
-
-    prevRingR = r;
-    prevRingMax = rMax;
-    ring++;
+    prevEdge = center + vr;
   }
   return { positions, planes };
 }
@@ -432,12 +395,25 @@ const ORBIT_RANGE = {
 const ORBIT_COLOR = {
   [VisualType.SUPERCLUSTER]: 0x6D28D9,
   [VisualType.CLUSTER]:      0x8B5CF6,
-  [VisualType.GALAXY]:       0x4C1D95,
+  [VisualType.GALAXY]:       0xA78BFA, // violet éclairci : lisible sur l'encre
   [VisualType.STAR]:         0x22D3EE,
   [VisualType.PLANET]:       0x0891B2,
   [VisualType.DWARF_PLANET]: 0xF9A8D4,
   [VisualType.SMALL_BODY]:   0x9CA3AF,
   [VisualType.MOON]:         0x059669,
+};
+
+/** Opacité du tracé d'orbite par type : les galaxies doivent tracer leur
+ *  révolution lisiblement, les lunes proches restent discrètes. */
+const ORBIT_OPACITY = {
+  [VisualType.SUPERCLUSTER]: 0.4,
+  [VisualType.CLUSTER]:      0.4,
+  [VisualType.GALAXY]:       0.5,
+  [VisualType.STAR]:         0.35,
+  [VisualType.PLANET]:       0.35,
+  [VisualType.DWARF_PLANET]: 0.3,
+  [VisualType.SMALL_BODY]:   0.3,
+  [VisualType.MOON]:         0.14,
 };
 
 /**
@@ -483,6 +459,7 @@ function buildDirectoryView(node) {
       ORBIT_COLOR[childType],
       obj.userData.orbitIncl, obj.userData.orbitOmega,
       ecc, orient,
+      ORBIT_OPACITY[childType] ?? 0.15,
     );
     orbitObjects.push(orbit);
 
@@ -946,6 +923,12 @@ function animateObjects(time) {
       const pulse = 1 + Math.sin(t * 2.2 + i * 1.7) * 0.035;
       obj.scale.setScalar(pulse);
       (obj.userData.sunUniforms || []).forEach(u => { u.value = t; });
+    }
+
+    // Couche de nuages des planètes : dérive indépendante de la rotation
+    // du globe (t est cumulatif, on pose donc la rotation absolue).
+    if (obj.userData.cloudSpin && obj.userData.cloudSkin) {
+      obj.userData.cloudSkin.rotation.y = t * obj.userData.cloudSpin;
     }
 
     // Gentle float (locked oscillation around baseY to prevent accumulation drift)

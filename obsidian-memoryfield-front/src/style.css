@@ -1,0 +1,101 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ink: #05060c;
+  --ember: #ffb347;
+  --ember-hot: #ffe9a8;
+  --text-lo: #667085;
+  --text-hi: #f2f4f8;
+  --font: "Space Grotesk", "SF Pro Display", system-ui, sans-serif;
+}
+
+html, body { height: 100%; overflow: hidden; background: var(--ink); }
+
+body { font-family: var(--font); color: var(--text-hi); }
+
+canvas#app { display: block; width: 100vw; height: 100vh; }
+
+/* ── HUD minimal ───────────────────────────────────────────── */
+#hud {
+  position: fixed; top: 0; left: 0; width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(5,6,12,.7), transparent);
+  pointer-events: none; z-index: 10;
+}
+
+#brand { display: flex; align-items: center; gap: 9px; }
+.brand-mark { color: var(--ember); font-size: 1.05rem; text-shadow: 0 0 12px rgba(255,179,71,.6); }
+#brand-name { font-size: .8rem; letter-spacing: .28em; text-transform: uppercase; font-weight: 600; }
+
+#stats { font-size: .72rem; color: var(--text-lo); font-variant-numeric: tabular-nums; }
+#stats .sep { margin: 0 7px; color: #23293d; }
+#stat-notes, #stat-cores, #stat-links { color: var(--text-hi); }
+
+#tip {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  font-size: .68rem; color: var(--text-lo); letter-spacing: .1em;
+  z-index: 10; pointer-events: none;
+}
+
+/* ── Étiquette de la note survolée ─────────────────────────── */
+#note-tooltip {
+  position: fixed; z-index: 20; pointer-events: none;
+  max-width: 320px;
+  padding: 9px 12px;
+  font-size: .8rem;
+  color: var(--text-hi);
+  background: rgba(10,12,22,.82);
+  border: 1px solid rgba(255,179,71,.35);
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5), 0 0 18px rgba(255,179,71,.12);
+  backdrop-filter: blur(6px);
+  transform: translate(-50%, -110%);
+}
+
+#note-tooltip .tt-name { font-weight: 600; }
+#note-tooltip .tt-meta { margin-top: 4px; font-size: .66rem; color: var(--text-lo); }
+
+/* ── Fenêtre d'aperçu de la note ───────────────────────────── */
+#note-preview {
+  position: fixed; z-index: 30;
+  width: 300px;
+  padding: 14px 16px 12px;
+  color: var(--text-hi);
+  background: rgba(10,12,22,.92);
+  border: 1px solid rgba(255,179,71,.4);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.6), 0 0 24px rgba(255,179,71,.15);
+  backdrop-filter: blur(10px);
+  transform: translate(-50%, -118%);
+  pointer-events: auto;
+}
+
+#note-preview .np-name { font-weight: 700; font-size: .95rem; padding-right: 22px; }
+#note-preview .np-path {
+  margin-top: 5px; font-size: .68rem; color: var(--text-lo);
+  word-break: break-all; letter-spacing: .02em;
+}
+#note-preview .np-meta { margin-top: 8px; font-size: .72rem; color: var(--text-lo); font-variant-numeric: tabular-nums; }
+#note-preview .np-links { margin-top: 4px; font-size: .66rem; color: rgba(255,179,71,.85); }
+
+#np-open {
+  margin-top: 12px; width: 100%;
+  padding: 8px 0;
+  font: inherit; font-size: .74rem; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: #1b1408;
+  background: linear-gradient(135deg, var(--ember), var(--ember-hot));
+  border: none; border-radius: 7px;
+  cursor: pointer; transition: filter .15s ease;
+}
+#np-open:hover { filter: brightness(1.12); }
+
+#np-close {
+  position: absolute; top: 8px; right: 10px;
+  width: 24px; height: 24px; line-height: 1;
+  font-size: 1.05rem; color: var(--text-lo);
+  background: transparent; border: none; border-radius: 6px;
+  cursor: pointer;
+}
+#np-close:hover { color: var(--text-hi); background: rgba(255,255,255,.08); }

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Champ de mémoires</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="hud">
+      <div id="brand">
+        <span class="brand-mark">✦</span>
+        <span id="brand-name">champ de mémoires</span>
+      </div>
+      <div id="stats">
+        <span id="stat-notes">—</span>
+        <span class="sep">·</span>
+        <span id="stat-cores">—</span>
+        <span class="sep">·</span>
+        <span id="stat-links">—</span>
+      </div>
+    </div>
+
+    <div id="tip">
+      survole une braise pour illuminer sa constellation · clic pour l'apercevoir · <kbd>Échap</kbd> pour fermer
+    </div>
+
+    <div id="note-tooltip" hidden>
+      <div class="tt-name"></div>
+      <div class="tt-meta"></div>
+    </div>
+
+    <div id="note-preview" hidden>
+      <button id="np-close" title="fermer (Échap)">×</button>
+      <div class="np-name"></div>
+      <div class="np-path"></div>
+      <div class="np-meta"></div>
+      <div class="np-links"></div>
+      <button id="np-open">ouvrir la note</button>
+    </div>
+  </body>
+  <script type="module" src="/src/main.js"></script>
+</html>

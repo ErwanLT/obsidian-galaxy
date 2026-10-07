@@ -30,10 +30,10 @@ export function getVisualType(node) {
     case 0: return VisualType.SUPERCLUSTER;
     case 1: return VisualType.CLUSTER;
     case 2: return VisualType.GALAXY;
-    case 3: return VisualType.STAR;
-    case 4: return VisualType.PLANET;
-    case 5: return VisualType.DWARF_PLANET;
-    default: return VisualType.SMALL_BODY;
+    // Au-delà de la galaxie, tout dossier est une planète texturée : dans un
+    // vault réel les dossiers profonds (topics) valent bien des planètes, et
+    // c'est ce niveau qui rend les planètes uniques visibles.
+    default: return VisualType.PLANET;
   }
 }
 

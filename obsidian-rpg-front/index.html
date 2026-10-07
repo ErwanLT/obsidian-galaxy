@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Obsidian Quest</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="stage">
+      <div class="screen">
+        <canvas id="game" width="320" height="192"></canvas>
+        <div id="scanlines"></div>
+
+<div id="hud">
+          <div id="brand">
+            <div class="brand-title">OBSIDIAN QUEST</div>
+            <div id="room-name" class="brand-room">—</div>
+            <div id="room-path" class="brand-path">—</div>
+          </div>
+
+          <div id="hud-actions">
+            <button id="btn-inv" class="hud-btn">✦ inventaire</button>
+            <button id="btn-ach" class="hud-btn">★ succès <b id="ach-count">0/13</b></button>
+          </div>
+
+          <div id="stats">
+            <span title="parchemins collectés">✦ <b id="st-col">0</b></span>
+            <span title="pièces visitées">◈ <b id="st-rooms">0</b></span>
+            <span title="mémoires de la pièce">☗ <b id="st-inroom">0</b></span>
+          </div>
+        </div>
+
+        <div id="crumb"></div>
+
+        <div id="vitals">
+          <div id="hearts" class="hearts"></div>
+          <div id="xp" class="xplabel">Lv 1 · 0 XP</div>
+        </div>
+
+        <div id="bossbar" hidden>
+          <div class="boss-name" id="boss-name"></div>
+          <div class="boss-track"><div id="boss-fill"></div></div>
+        </div>
+
+        <canvas id="minimap" width="24" height="16"></canvas>
+
+        <div id="prompt" hidden></div>
+        <div id="toast" hidden></div>
+
+        <div id="controls">
+          wasd / zqsd — se déplacer<br />
+          ESPACE — épée &nbsp;·&nbsp; E — lire / entrer<br />
+          I — inventaire &nbsp;·&nbsp; K — succès &nbsp;·&nbsp; TAB — routes &nbsp;·&nbsp; M — son
+        </div>
+      </div>
+    </div>
+
+    <div id="death" class="modal" hidden>
+      <div class="window">
+        <div class="death-title">PERDU</div>
+        <div class="death-msg">le donjon t'a ramené aux portes de la salle.</div>
+        <button id="death-retry" class="btn btn-gold">reprendre</button>
+      </div>
+    </div>
+
+    <div id="modal" class="modal" hidden>
+      <div class="window">
+        <div class="win-bar">
+          <span id="modal-title">Grimoire</span>
+          <button id="modal-close" title="fermer (Échap)">✕</button>
+        </div>
+        <div id="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="boot" hidden>
+      <div class="boot-title">OBSIDIAN QUEST</div>
+      <div id="boot-msg" class="boot-msg">ouverture du donjon…</div>
+      <div id="boot-actions" class="boot-actions" hidden>
+        <button id="boot-retry" class="btn btn-gold">réessayer</button>
+        <button id="boot-demo" class="btn btn-ghost">mode démo</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

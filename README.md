@@ -25,6 +25,7 @@ Le projet est divisé en deux modules distincts :
 
 1. **[obsidian-back](./obsidian-back/)** : API REST développée en **Java / Spring Boot** qui scanne votre Vault Obsidian en local et génère un arbre de données hiérarchisé de type `Universe`.
 2. **[obsidian-front](./obsidian-front/)** : Application web développée en **Vite + Vanilla JS + Three.js** pour la scène de rendu 3D interactive, les contrôles orbitaux fluides et l'interface utilisateur (HUD).
+3. **[obsidian-rpg-front](./obsidian-rpg-front/)** : Explorateur rétro **8-bit** développé en **Vite + Vanilla JS (Canvas 2D)** qui transforme le Vault en donjon d'exploration : chaque dossier devient une salle, chaque note un parchemin à collecter, chaque sous-dossier une porte.
 
 ---
 
@@ -94,6 +95,30 @@ Pour rendre la cartographie plus vivante et utile, deux fonctionnalités majeure
 2. **☄️ Taille Dynamique des Lunes** :
    - La taille physique de chaque lune (note) est calculée de manière logarithmique selon son poids en octets sur le disque local (`node.size`).
    - Vos notes denses et complètes apparaissent comme de gros satellites brillants, tandis que les notes courtes ou brouillons forment de plus petits corps célestes.
+
+---
+
+## 🕹️ Mode Exploration 8-Bit (`obsidian-rpg-front`)
+
+Un jeu d'exploration rétro dans le style des RPG 8-bit :
+
+- **Chaque dossier = une salle** générée procéduralement (sol, murs, décorations, thème coloré déterministe par le nom du dossier).
+- **Chaque note Markdown = un parchemin** à collecter : approchez-vous et appuyez sur `E` (ou clic) pour l'ouvrir dans le **Grimoire** et le rouvrir dans Obsidian via `obsidian://open`.
+- **Chaque sous-dossier = une porte** au sommet de la salle ; une porte trônée en bas permet de remonter au dossier parent.
+- **Brouillard de guerre** : la carte se découvre progressivement en explorant (salle entière à l'écran, tuiles cachées dans l'ombre, minimap révélée au fil des pas).
+- **Combat à l'épée** : `Espace` pour frapper les créatures (limaçons, farceurs) et gagner de l'**XP** (niveaux → +1 cœur). Les contacts font perdre des cœurs **♥** (5 max) ; les parchemins restaurent 1 cœur.
+- **Gardiens** : certaines salles abritent un **boss** qui protège ses parchemins d'une aura sombre — vaincs-le pour les libérer (barre de vie en haut de l'écran). La mort ramène aux portes de la pièce (ressuscité via le bouton).
+- **Grimoire / Inventaire** : collection persistante (`localStorage`, **`I`** pour relire les notes trouvées et les rouvrir dans Obsidian), notes en surplus de la salle accessibles via la **Bibliothèque**, et menu **Routes** (`Tab`) pour les couloirs trop nombreux.
+- **Succès** (touche **`K`** ou bouton HUD) : 13 exploits persistés (parchemins, salles visitées, salles entièrement révélées, créatures vaincues, gardiens terrassés, niveaux, morts) — débloqués → toast + compteur en haut à droite.
+- **Minimap**, fil d'Ariane cliquable (retour instantané à un ancêtre), effets sonores 8-bit (WebAudio, touche `M`).
+
+```bash
+cd obsidian-rpg-front
+npm install
+npm run dev
+```
+
+👉 **[http://localhost:5173](http://localhost:5173)** (port libre : `npm run dev -- --port 5175`)
 
 ---
 

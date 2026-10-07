@@ -11,9 +11,9 @@ export const COLORS = {
   supercluster: [0x4C1D95, 0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8B5CF6, 0xA78BFA],
   cluster:      [0x5B21B6, 0x6D28D9, 0x7C3AED, 0x8E3BFF, 0x8B5CF6, 0x9D6BFA],
   galaxy:       [0x7C3AED, 0x8B5CF6, 0xA78BFA, 0x6D28D9, 0x5B21B6, 0x4C1D95],
-  // Cyans saturés de valeur moyenne : les teintes sombres (0x0E7490,
-  // 0x0369A1) ressortaient en gris-bleu terne une fois éclairées.
-  star:         [0x06B6D4, 0x0EA5E9, 0x22D3EE, 0x14B8A6, 0x38BDF8, 0x2DD4BF],
+  // Étoiles = teintes stellaires réalistes : blanc chaud → jaune → orange →
+  // rouge. Pas de bleu : un soleil bleu n'existe que dans la SF.
+  star:         [0xFFE9A8, 0xFFD25C, 0xFFB84D, 0xFF9A3C, 0xFF8A3C, 0xFFD9A0],
   planet:       [0xF59E0B, 0xEF4444, 0x10B981, 0xF97316, 0xEC4899, 0x84CC16],
   // Teintes pâles glacées pour les planètes naines.
   dwarfPlanet:  [0xE5E7EB, 0xD8E3F0, 0xF3E8FF, 0xE0F2FE, 0xCBD5E1, 0xA7F3D0],
@@ -525,6 +525,96 @@ export function createStar(scene, node, position, index) {
   const corona = new THREE.Mesh(new THREE.SphereGeometry(size * 2.4, 32, 32), coronaMat);
   group.add(corona);
 
+  // ── Protubérances / éruptions solaires ──
+  // Particules animées par le vertex shader : elles jaillissent de la surface
+  // le long d'une boucle magnétique, s'éloignent puis s'éteignent. zéro CPU.
+  // uColor = couleur du soleil : les éruptions sont de la même teinte.
+  const N_ERUPT = 700;
+  const origin = new Float32Array(N_ERUPT * 3);
+  const dir = new Float32Array(N_ERUPT * 3);
+  const seed = new Float32Array(N_ERUPT);
+  const ev = new THREE.Vector3();
+  for (let i = 0; i < N_ERUPT; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    ev.set(
+      Math.sin(phi) * Math.cos(theta),
+      Math.cos(phi),
+      Math.sin(phi) * Math.sin(theta),
+    );
+    const r0 = size * (1.02 + Math.random() * 0.12);
+    origin[i * 3] = ev.x * r0;
+    origin[i * 3 + 1] = ev.y * r0;
+    origin[i * 3 + 2] = ev.z * r0;
+    const d = ev.clone().add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.35,
+      (Math.random() - 0.5) * 0.35,
+      (Math.random() - 0.5) * 0.35,
+    )).normalize();
+    dir[i * 3] = d.x;
+    dir[i * 3 + 1] = d.y;
+    dir[i * 3 + 2] = d.z;
+    seed[i] = Math.random();
+  }
+  const eruptGeo = new THREE.BufferGeometry();
+  eruptGeo.setAttribute('position', new THREE.BufferAttribute(origin, 3));
+  eruptGeo.setAttribute('aDir', new THREE.BufferAttribute(dir, 3));
+  eruptGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  // Grosse bounding sphere : les particules s'éloignent bien au-delà de la
+  // surface, sinon le frustum culling les couperait.
+  eruptGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), size * 6);
+
+  const eruptMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(color) },
+      uSize: { value: size },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute vec3 aDir;
+      attribute float aSeed;
+      uniform float uTime;
+      uniform float uSize;
+      varying float vAlpha;
+      varying float vBright;
+      void main() {
+        // Cycle : chaque particule a une éruption périodique déphasée
+        float t = fract(uTime * 0.14 + aSeed);
+
+        // Trajectoire : éjection radiale accélérée + dérive latérale ondulée
+        vec3 p = position
+          + aDir * (t * t * uSize * 3.0)
+          + vec3(sin(t * 6.283 + aSeed * 100.0), 0.0, cos(t * 6.283 + aSeed * 90.0))
+              * (t * uSize * 0.9);
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = (3.2 - t * 2.0) * (320.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+
+        vAlpha = (1.0 - t) * (1.0 - t * 0.5);
+        vBright = 0.4 + 0.6 * sin(t * 3.1415);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      varying float vBright;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float a = smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(uColor * vBright * 1.8, a * vAlpha);
+      }
+    `,
+  });
+  sunUniforms.push(eruptMat.uniforms.uTime);
+
+  const eruptions = new THREE.Points(eruptGeo, eruptMat);
+  group.add(eruptions);
+
   group.userData.sunUniforms = sunUniforms;
 
   // Lueur diffuse en sprite derrière la couronne : donne de la profondeur.
@@ -549,28 +639,247 @@ export function createStar(scene, node, position, index) {
   return group;
 }
 
+// ─── Planètes uniques : textures procédurales seedées ────────────────────────
+// Chaque planète reçoit une surface générée à partir d'un seed stable
+// (dérivé du nom + index) : deux planètes ne se ressemblent jamais, sans
+// aucun asset externe.
+
+function _lerp(a, b, t) { return a + (b - a) * t; }
+
+function _hash2(x, y, s) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function _vnoise(x, y, s) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = (x - xi), yf = (y - yi);
+  const ux = xf * xf * (3 - 2 * xf), uy = yf * yf * (3 - 2 * yf);
+  return _lerp(
+    _lerp(_hash2(xi, yi, s), _hash2(xi + 1, yi, s), ux),
+    _lerp(_hash2(xi, yi + 1, s), _hash2(xi + 1, yi + 1, s), ux),
+    uy,
+  );
+}
+
+function _fbm(x, y, oct, s) {
+  let v = 0, a = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) {
+    v += a * _vnoise(x * f, y * f, s);
+    f *= 2.07;
+    a *= 0.5;
+  }
+  return v;
+}
+
+function _hashName(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+const PLANET_ARCHETYPES = ['rocky', 'ocean', 'gas', 'ice', 'volcanic'];
+
+// Teinte d'accent par archétype : sert à la lueur, à l'atmosphère et aux
+// anneaux pour que toute la planète soit cohérente.
+const ARCHETYPE_COLOR = {
+  rocky:     new THREE.Color(0xC08A5E),
+  ocean:     new THREE.Color(0x2F6FD0),
+  gas:       new THREE.Color(0xE8B465),
+  ice:       new THREE.Color(0x9FD8E8),
+  volcanic:  new THREE.Color(0xF2621E),
+};
+
+const ARCHETYPE_ATMO = {
+  rocky:     new THREE.Color(0xBFD8F0),
+  ocean:     new THREE.Color(0x5AA2F0),
+  gas:       new THREE.Color(0xF2D9A8),
+  ice:       new THREE.Color(0xC9E8F2),
+  volcanic:  new THREE.Color(0xF9A15C),
+};
+
+// Lissage doux (smoothstep) : contraste net mais sans aliasing.
+function _ss(t, a, b) {
+  const x = Math.min(1, Math.max(0, (t - a) / (b - a)));
+  return x * x * (3 - 2 * x);
+}
+
+/** Calcule la couleur [r,g,b] d'un texel (lon, lat) en radians, seedé. */
+function _planetPixel(lon, lat, x, y, s, archetype) {
+  let r, g, b;
+
+  if (archetype === 'ocean') {
+    // Océan → continents avec bathymétrie. Le contraste est fort pour que la
+    // planète soit reconnaissable même petite.
+    const c = _fbm(lon * 1.6, lat * 2.2 + s * 0.01, 5, s * 1.7);
+    const land = _ss(c, 0.46, 0.58);
+    if (land > 0.05) {
+      const h = _fbm(lon * 3.2, lat * 3.6 + 7.3, 4, s * 2.1);
+      const peak = _ss(h, 0.62, 0.82);   // montagnes claires
+      r = _lerp(0.16, 0.62, peak); g = _lerp(0.52, 0.55, peak); b = _lerp(0.18, 0.30, peak);
+    } else {
+      const co = _ss(c, 0.26, 0.44);     // abaissement vers la côte
+      r = _lerp(0.015, 0.20, co); g = _lerp(0.06, 0.50, co); b = _lerp(0.34, 0.92, co);
+    }
+  } else if (archetype === 'gas') {
+    // Ceintures turbulentes très contrastées : deux palettes (chaude / froide)
+    // tirées au sort par seed.
+    const sharp = 2.6 + _fbm(lon * 0.4, lat * 3.0, 3, s + 9) * 2.4;
+    const band = Math.sin(lat * sharp + _fbm(lon * 1.3, lat * 5.0, 4, s * 1.3) * 1.8);
+    const warm = (s & 1) === 0;
+    const A = warm ? [1.00, 0.84, 0.60] : [0.55, 0.86, 1.00];
+    const B = warm ? [0.58, 0.22, 0.08] : [0.06, 0.24, 0.55];
+    const mag = _ss(band, -0.85, 0.85);
+    const glint = 0.9 + 0.25 * _fbm(lon * 2.0, lat * 2.0, 3, s + 3);
+    r = glint * _lerp(A[0], B[0], mag);
+    g = glint * _lerp(A[1], B[1], mag);
+    b = glint * _lerp(A[2], B[2], mag);
+  } else if (archetype === 'ice') {
+    // Banquise polaire : glace bleutée, crevasses sombres, calottes quasi pures.
+    const n = _fbm(lon * 1.8, lat * 2.6 + 3.0, 4, s * 1.9);
+    const cre = _ss(_fbm(lon * 6.0, lat * 6.0, 3, s * 2.7), 0.66, 0.74);
+    const cap = Math.pow(Math.abs(Math.cos(lat)), 20);
+    r = _lerp(0.68, 0.95, n) * _lerp(1, 0.30, cre * 0.85) * (1 - cap * 0.15) + Math.min(cap, 1) * 0.3;
+    g = _lerp(0.80, 0.98, n) * _lerp(1, 0.35, cre * 0.80) * (1 - cap * 0.12) + Math.min(cap, 1) * 0.3;
+    b = _lerp(0.94, 1.00, n) * _lerp(1, 0.42, cre * 0.70) + Math.min(cap, 1) * 0.2;
+  } else if (archetype === 'volcanic') {
+    // Basalte sombre craquelé, lave incandescente dans les failles.
+    const h = _fbm(lon * 2.4, lat * 3.0 + 4.2, 5, s * 1.5);
+    r = _lerp(0.035, 0.17, h); g = _lerp(0.030, 0.12, h); b = _lerp(0.045, 0.16, h);
+    const lava = _fbm(lon * 5.0, lat * 5.0 + 7.7, 4, s * 2.3);
+    const lm = _ss(lava, 0.68, 0.86);
+    if (lm > 0) {
+      const hot = lm * (1 + _ss(_fbm(lon * 9, lat * 9, 2, s * 5), 0.55, 0.8) * 0.5);
+      r = _lerp(r, 1.0, hot); g = _lerp(g, 0.45, hot * 0.9); b = _lerp(b, 0.06, hot * 0.7);
+    }
+  } else {
+    // rocheuse : régolithe brun-rouge, basins sombres et crêtes éclairées.
+    const h = _fbm(lon * 2.2, lat * 3.0 + s * 0.01, 5, s * 1.3);
+    r = _lerp(0.40, 0.74, h); g = _lerp(0.28, 0.60, h); b = _lerp(0.18, 0.42, h);
+    const ma = _ss(_fbm(lon * 3.4, lat * 4.2 + 7.0, 4, s * 2.2), 0.55, 0.70);
+    r = _lerp(r, 0.15, ma); g = _lerp(g, 0.11, ma); b = _lerp(b, 0.09, ma);
+    const peak = _ss(_fbm(lon * 5.0, lat * 6.0 + 5.1, 4, s * 2.9), 0.62, 0.72);
+    r = r * (1 - peak * 0.35) + peak * 0.25;
+    g = g * (1 - peak * 0.35) + peak * 0.22;
+    b = b * (1 - peak * 0.35) + peak * 0.18;
+  }
+
+  return [Math.round(Math.min(1, r) * 255), Math.round(Math.min(1, g) * 255), Math.round(Math.min(1, b) * 255)];
+}
+
+/** Texture de surface 256×128 d'une planète, unique par seed. */
+function _makePlanetTexture(seed, archetype) {
+  const W = 256, H = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const data = img.data;
+  for (let y = 0; y < H; y++) {
+    const lat = (y / H) * Math.PI - Math.PI / 2;
+    for (let x = 0; x < W; x++) {
+      const lon = (x / W) * Math.PI * 2;
+      const px = _planetPixel(lon, lat, x, y, seed, archetype);
+      const i = (y * W + x) * 4;
+      data[i] = px[0]; data[i + 1] = px[1]; data[i + 2] = px[2]; data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;   // les couleurs du canvas sont du sRGB
+  return tex;
+}
+
+/** Couche de nuages : alpha blanc là où le bruit dépasse le seuil. */
+function _makeCloudTexture(seed) {
+  const W = 128, H = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const data = img.data;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const u = x / W, v = y / H;
+      const n = _fbm(u * 4 + seed * 0.01, v * 6 + 3, 4, seed * 1.1);
+      const a = n > 0.58 ? Math.floor(((n - 0.58) / 0.42) * 235 + 20) : 0;
+      const i = (y * W + x) * 4;
+      data[i] = 255; data[i + 1] = 255; data[i + 2] = 255; data[i + 3] = a;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /**
- * Build a Planet mesh
+ * Halo d'atmosphère : sphère légèrement plus grande, fresnel → anneau doux
+ * qui s'illumine sur les bords du disque (coucher de soleil permanent).
+ */
+function makeAtmosphere(size, atmoColor) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: atmoColor } },
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    vertexShader: `
+      varying vec3 vN;
+      varying vec3 vWorld;
+      void main() {
+        vN = normalize(mat3(modelMatrix) * normal);
+        vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying vec3 vN;
+      varying vec3 vWorld;
+      void main() {
+        vec3 viewDir = normalize(cameraPosition - vWorld);
+        float fres = pow(1.0 - abs(dot(normalize(vN), viewDir)), 2.6);
+        gl_FragColor = vec4(uColor * fres * 1.8, fres * 0.85);
+      }
+    `,
+  });
+  return new THREE.Mesh(new THREE.SphereGeometry(size * 1.14, 32, 32), mat);
+}
+
+/**
+ * Build a Planet mesh — chaque planète est un cas unique : texture de surface
+ * procédurale seedée selon son archétype (rocheuse, océan, géante gazeuse,
+ * glace, volcanique), couche de nuages qui dérive, atmosphère fresnel et
+ * éventuellement des anneaux. Éclairée par le Soleil central (phases réelles).
  */
 export function createPlanet(scene, node, position, index) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.userData = { node, type: 'planet', index };
 
-  const color = pickColor(COLORS.planet, index);
   const size = 4 + Math.min(node.markdownCount * 0.5, 8);
   group.userData.visualRadius = planetRadius(node);   // atmosphère + anneau éventuel
 
-  // Planet sphere with texture-like variation
-  // Émissif quasi nul : éclairé par le Soleil central (proche PointLight), la
-  // moitié nuit reste dans l'ombre → phases réelles (terminateur visible).
-  const geo = new THREE.SphereGeometry(size, 32, 32);
+  const seed = (_hashName(`${node.name}#${index}`) || 1) >>> 0;
+  const archetype = PLANET_ARCHETYPES[seed % PLANET_ARCHETYPES.length];
+  const baseColor = ARCHETYPE_COLOR[archetype];
+
+  // Surface unique — `emissiveMap` = même texture en émissif modéré : la
+  // planète reste lisible même loin du Soleil, le terminateur s'adoucit
+  // mais les détails ne disparaissent jamais.
+  const tex = _makePlanetTexture(seed, archetype);
+  const geo = new THREE.SphereGeometry(size, 40, 40);
   const mat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    emissiveIntensity: 0.06,
-    roughness: 0.6,
-    metalness: 0.1,
+    map: tex,
+    emissiveMap: tex,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.55,
+    roughness: 0.8,
+    metalness: 0.0,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
@@ -579,19 +888,43 @@ export function createPlanet(scene, node, position, index) {
   mesh.rotation.x = (Math.random() - 0.5) * 0.5;
   group.add(mesh);
 
-  addGlow(group, color, size * 1.9, 0.45);   // atmosphère
+  // Nuages qui dérivent (rocheuses et océans surtout, gazeuses un peu)
+  const cloudChance = archetype === 'gas' ? 0.45 : 0.85;
+  if (Math.random() < cloudChance) {
+    const cloudTex = _makeCloudTexture(seed ^ 0x9E3779B9);
+    const cloud = new THREE.Mesh(
+      new THREE.SphereGeometry(size * 1.03, 28, 28),
+      new THREE.MeshBasicMaterial({
+        map: cloudTex, transparent: true, opacity: 0.6, depthWrite: false,
+      }),
+    );
+    cloud.rotation.set(mesh.rotation.x, mesh.rotation.z, 0);
+    group.add(cloud);
+    group.userData.cloudSpin = 0.012 + Math.random() * 0.02;
+    group.userData.cloudSkin = cloud;
+  }
 
-  // Optional thin ring (30% chance)
-  if (Math.random() < 0.3) {
-    const rGeo = new THREE.RingGeometry(size * 1.3, size * 1.8, 48);
-    const rMat = new THREE.MeshBasicMaterial({
-      color,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.15,
-    });
-    const ring = new THREE.Mesh(rGeo, rMat);
-    ring.rotation.x = Math.PI / 3;
+  // Atmosphère fresnel
+  group.add(makeAtmosphere(size, ARCHETYPE_ATMO[archetype]));
+
+  // Lueur diffuse
+  addGlow(group, baseColor, size * 1.9, 0.4);
+
+  // Anneaux : fréquents sur gazeuses/glace, rares ailleurs
+  const ringish = archetype === 'gas' || archetype === 'ice';
+  if ((ringish && Math.random() < 0.85) || (!ringish && Math.random() < 0.22)) {
+    const rIn = size * (1.35 + Math.random() * 0.22);
+    const rOut = rIn * (1.4 + Math.random() * 0.5);
+    const rColor = baseColor.clone().offsetHSL(Math.random() * 0.1 - 0.05, 0, 0.05);
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(rIn, rOut, 64),
+      new THREE.MeshBasicMaterial({
+        color: rColor, side: THREE.DoubleSide,
+        transparent: true, opacity: 0.3 + Math.random() * 0.3,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2 - (Math.random() - 0.5) * 0.35;
     group.add(ring);
   }
 
@@ -657,30 +990,79 @@ export function createSmallBody(scene, node, position, index) {
   return group;
 }
 
+/** Texel d'une lune : régolithe gris, mers sombres, cratères, teinte propre. */
+function _moonPixel(lon, lat, s) {
+  const n = _fbm(lon * 3.0, lat * 3.4 + 2.0, 4, s * 1.3);
+  // Base poussière lunaire, avec un léger décalage de teinte par lune
+  // (gris chaud, gris froid, beige…) pour qu'aucune lune ne ressemble à la
+  // suivante même à petite taille.
+  const tint = (s & 15) / 15;
+  let r = _lerp(0.40 + tint * 0.08, 0.62 + tint * 0.08, n);
+  let g = _lerp(0.38 + tint * 0.02, 0.59 + tint * 0.02, n);
+  let b = _lerp(0.36 + (1 - tint) * 0.10, 0.55 + (1 - tint) * 0.10, n);
+
+  // Mers sombres (basaltes)
+  const maria = _ss(_fbm(lon * 2.0, lat * 2.6 + 3.0, 3, s * 1.7), 0.55, 0.66);
+  r = _lerp(r, 0.25, maria); g = _lerp(g, 0.23, maria); b = _lerp(b, 0.24, maria);
+
+  // Cratères : petites taches plus sombres, bord éclairé
+  const cr = _ss(_fbm(lon * 6.0, lat * 6.0 + 5.0, 3, s * 2.3), 0.72, 0.80);
+  r = _lerp(r, 0.16, cr); g = _lerp(g, 0.15, cr); b = _lerp(b, 0.15, cr);
+
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+/** Texture de surface d'une lune (128×64), unique par seed. */
+function _makeMoonTexture(seed) {
+  const W = 128, H = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const data = img.data;
+  for (let y = 0; y < H; y++) {
+    const lat = (y / H) * Math.PI - Math.PI / 2;
+    for (let x = 0; x < W; x++) {
+      const lon = (x / W) * Math.PI * 2;
+      const px = _moonPixel(lon, lat, seed);
+      const i = (y * W + x) * 4;
+      data[i] = px[0]; data[i + 1] = px[1]; data[i + 2] = px[2]; data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /**
- * Build a Moon mesh — small sphere
+ * Build a Moon mesh — petite sphère, surface lunaire procédurale unique
+ * (chaque note a sa propre lune : poussière teintée, mers, cratères).
  */
 export function createMoon(scene, node, position, index) {
   const group = new THREE.Group();
   group.position.copy(position);
   group.userData = { node, type: 'moon', index };
 
-  const color = pickColor(COLORS.moon, index);
-  
   // Dynamic size based on file size (node.size in bytes) using a log scale
   const sizeInBytes = node.size || 0;
   const logScale = Math.log10(Math.max(1, sizeInBytes));
   const size = 1.0 + Math.min(logScale * 0.6, 2.5); // min 1.0, max 3.5
-  
+
   group.userData.visualRadius = moonRadius(node);   // halo compris
 
-  const geo = new THREE.SphereGeometry(size, 16, 16);
+  const seed = (_hashName(`${node.name}#${index}`) || 1) >>> 0;
+  const color = pickColor(COLORS.moon, index);   // accent du halo
+
+  const tex = _makeMoonTexture(seed);
+  const geo = new THREE.SphereGeometry(size, 24, 24);
   const mat = new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.55,
+    map: tex,
+    emissiveMap: tex,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.5,
+    roughness: 0.9,
     metalness: 0.0,
-    emissive: color,
-    emissiveIntensity: 0.12,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData = { isCore: true };
@@ -707,7 +1089,7 @@ export function createMoon(scene, node, position, index) {
  * @param {number} e     excentricité (0 = cercle)
  * @param {number} orient rotation dans le plan (orientation du péricentre)
  */
-export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, omega = 0, e = 0, orient = 0) {
+export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, omega = 0, e = 0, orient = 0, opacity = 0.15) {
   const points = [];
   const segments = 128;
   const b = radius * Math.sqrt(Math.max(0, 1 - e * e));
@@ -732,7 +1114,7 @@ export function createOrbit(scene, center, radius, color = 0x333366, incl = 0, o
   const mat = new THREE.LineBasicMaterial({
     color,
     transparent: true,
-    opacity: 0.15,
+    opacity,
   });
   const orbit = new THREE.LineLoop(geo, mat);
   orbit.position.copy(center);
