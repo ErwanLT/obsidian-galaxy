@@ -167,6 +167,8 @@
         <div id="info-badge"></div>
         <h2 id="info-name"></h2>
         <p id="info-path"></p>
+        <p id="info-excerpt" hidden></p>
+        <div id="info-tags" hidden></div>
 
         <div id="info-stats"></div>
 
@@ -229,6 +231,10 @@
       <button type="button" data-filter="cited">Très citées</button>
       <button type="button" data-filter="orphans">Orphelines</button>
       <button type="button" data-filter="big">Plus grosses</button>
+      <button type="button" data-filter="recent" data-needs="dates">Récentes</button>
+      <button type="button" data-filter="forgotten" data-needs="dates">Oubliées</button>
+      <select id="constellation-tag" data-needs="tags" aria-label="Filtrer par tag"><option value="">#tag…</option></select>
+      <button type="button" id="btn-history" data-needs="timeline" title="Rejouer la création des notes">▶ Histoire</button>
       <span class="cb-count" id="constellation-count"></span>
       <button type="button" class="cb-exit" id="btn-exit-constellation" title="Revenir au système (G)">Quitter</button>
     </div>

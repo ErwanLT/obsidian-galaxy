@@ -176,3 +176,31 @@ describe('mini-carte', async () => {
     for (const n of dirs) if (n._parent && n._parent !== v) expect(dist(n)).toBeGreaterThan(dist(n._parent));
   });
 });
+
+describe('dates relatives', async () => {
+  const { relativeTime } = await import('../src/panel.js');
+  const now = Date.UTC(2026, 9, 7);
+  const DAY = 86400000;
+  it('choisit une unité lisible', () => {
+    expect(relativeTime(now - DAY, now)).toBe('hier');
+    expect(relativeTime(now - 21 * DAY, now)).toBe('il y a 3 semaines');
+    expect(relativeTime(now - 90 * DAY, now)).toBe('il y a 3 mois');
+    expect(relativeTime(now - 800 * DAY, now)).toBe('il y a 2 ans');
+  });
+});
+
+describe('recherche étendue', () => {
+  const entries = [
+    { node: { name: 'Kafka', tags: ['Messaging'], excerpt: 'Un broker distribué' }, ancestors: [] },
+    { node: { name: 'Résilience', tags: ['back'], excerpt: 'Circuit breaker et Kafka en secours' }, ancestors: [] },
+    { node: { name: 'Divers', excerpt: 'rien' }, ancestors: [] },
+  ];
+  it('#tag cherche parmi les tags, sans accents ni casse', () => {
+    expect(searchEntries(entries, '#mess').map(e => e.node.name)).toEqual(['Kafka']);
+    expect(searchEntries(entries, '#').length).toBe(0);
+  });
+  it('le nom passe avant l’extrait', () => {
+    expect(searchEntries(entries, 'kafka').map(e => e.node.name)).toEqual(['Kafka', 'Résilience']);
+    expect(searchEntries(entries, 'ka').map(e => e.node.name)).toEqual(['Kafka']);   // extrait : 3 lettres minimum
+  });
+});

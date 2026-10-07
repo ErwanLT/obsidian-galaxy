@@ -55,14 +55,15 @@ public final class NoteParser {
         for (String t : fm.tags()) {
             addTag(tags, t);
         }
-        String withoutCode = CODE_FENCE.matcher(body).replaceAll(" ");
-        withoutCode = INLINE_CODE.matcher(withoutCode).replaceAll(" ");
+        String withoutFences = CODE_FENCE.matcher(body).replaceAll(" ");
+        String withoutCode = INLINE_CODE.matcher(withoutFences).replaceAll(" ");
         Matcher inline = INLINE_TAG.matcher(withoutCode);
         while (inline.find()) {
             addTag(tags, inline.group(1));
         }
 
-        String plain = plainText(withoutCode);
+        // Le code en ligne garde son texte dans l'extrait (« avec @Async, offre… »).
+        String plain = plainText(withoutFences);
         long words = plain.isBlank() ? 0 : SPACES.split(plain.trim()).length;
         return new ParsedNote(List.copyOf(targets), List.copyOf(tags.values()), excerpt(plain), words);
     }
@@ -79,7 +80,8 @@ public final class NoteParser {
 
     /** Texte lisible : syntaxe Markdown retirée, liens réduits à leur libellé. */
     static String plainText(String body) {
-        String s = IMAGE.matcher(body).replaceAll(" ");
+        String s = INLINE_CODE.matcher(body).replaceAll(m -> Matcher.quoteReplacement(m.group().replace("`", "")));
+        s = IMAGE.matcher(s).replaceAll(" ");
         Matcher wiki = WIKI_LINK.matcher(s);
         StringBuilder sb = new StringBuilder();
         while (wiki.find()) {

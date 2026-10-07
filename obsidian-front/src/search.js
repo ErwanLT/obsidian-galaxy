@@ -19,16 +19,30 @@ export function fold(str) {
   return [...String(str)].map(c => c.normalize('NFD')[0].toLowerCase()).join('');
 }
 
-/** Correspondances triées : début de nom d'abord, puis noms courts. */
+/**
+ * Correspondances triées : début de nom d'abord, puis noms courts, puis les notes
+ * dont seul l'extrait contient le texte. « #tag » cherche parmi les tags.
+ */
 export function searchEntries(entries, query, limit = 40) {
-  const q = fold(query.trim());
+  const raw = query.trim();
+  if (raw.startsWith('#')) {
+    const t = fold(raw.slice(1));
+    if (!t) return [];
+    return entries
+      .filter(e => (e.node.tags || []).some(tag => fold(tag).startsWith(t)))
+      .sort((a, b) => a.node.name.localeCompare(b.node.name))
+      .slice(0, limit);
+  }
+  const q = fold(raw);
   if (!q) return [];
-  return entries
+  const byName = entries
     .map(e => ({ e, i: fold(e.node.name).indexOf(q) }))
     .filter(x => x.i >= 0)
     .sort((a, b) => a.i - b.i || a.e.node.name.length - b.e.node.name.length)
-    .slice(0, limit)
     .map(x => x.e);
+  const named = new Set(byName);
+  const byExcerpt = q.length < 3 ? [] : entries.filter(e => !named.has(e) && e.node.excerpt && fold(e.node.excerpt).includes(q));
+  return [...byName, ...byExcerpt].slice(0, limit);
 }
 
 function highlight(name, q) {
@@ -116,7 +130,7 @@ export class SearchPalette {
   render(query) {
     this.results.innerHTML = '';
     this.hits = searchEntries(this.entries, query);
-    const q = fold(query.trim());
+    const q = fold(query.trim().replace(/^#/, ''));
     if (!q) return;
     if (!this.hits.length) {
       this.results.innerHTML = `<div class="search-empty">Aucun résultat pour « ${esc(query.trim())} »</div>`;
@@ -128,11 +142,13 @@ export class SearchPalette {
       btn.type = 'button';
       btn.className = 'search-hit';
       const parents = ancestors.map(a => a.name).join(' / ') || 'Univers';
+      // Trouvée par son extrait ou ses tags : on montre pourquoi.
+      const why = !fold(node.name).includes(q) && node.excerpt ? ` · « ${node.excerpt.slice(0, 60)}… »` : '';
       btn.innerHTML = `
       ${dot(node.visualType, 'search-hit-dot')}
       <span class="search-hit-text">
         <span class="search-hit-name">${highlight(node.name, q)}</span>
-        <span class="search-hit-path">${esc(parents)}</span>
+        <span class="search-hit-path">${esc(parents + why)}</span>
       </span>
       <span class="search-hit-type">${esc(TYPE_LABEL[node.visualType] || '')}</span>
     `;

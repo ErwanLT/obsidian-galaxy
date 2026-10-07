@@ -15,4 +15,9 @@ export default [
       'no-unused-vars': ['error', { args: 'after-used', argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // Fichiers de configuration : exécutés par Node.
+    files: ['*.config.js'],
+    languageOptions: { globals: { ...globals.node } },
+  },
 ];

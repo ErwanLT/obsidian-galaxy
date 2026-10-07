@@ -108,7 +108,9 @@ export class Constellation {
       posArr.set([pos[i].x, pos[i].y, pos[i].z], i * 3);
       const c = kelvinColor(CLUSTER_TEMPS[groupOf(nd) % CLUSTER_TEMPS.length]);
       const cites = (nd._in || []).length;
-      const glow = 0.45 + Math.min(1, Math.log2(1 + cites) / 4) * 0.55;
+      // Les notes délaissées pâlissent (rang d'ancienneté fourni par le back récent).
+      const age = nd._ageRank ?? 0;
+      const glow = (0.45 + Math.min(1, Math.log2(1 + cites) / 4) * 0.55) * (1 - 0.5 * age);
       this.baseColors.set([c.r * glow, c.g * glow, c.b * glow], i * 3);
       sizeArr[i] = 5 + Math.log2(1 + cites) * 3.2 + (nd.rarity === 'legendaire' ? 3 : nd.rarity === 'rare' ? 1.5 : 0);
     });
@@ -167,6 +169,7 @@ export class Constellation {
     const lgeo = new THREE.BufferGeometry();
     lgeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
     lgeo.setAttribute('color', new THREE.Float32BufferAttribute(lineCol, 3));
+    this.lineBase = Float32Array.from(lineCol);
     this.lines = new THREE.LineSegments(lgeo, new THREE.LineBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.1,
       blending: THREE.AdditiveBlending, depthWrite: false,
@@ -185,6 +188,8 @@ export class Constellation {
 
     this.focus = null;
     this.filter = 'all';
+    this.tag = null;
+    this.cutoff = null;   // « Histoire » : seules les notes créées avant cette date existent
     this.path = null;
     this.pathLine = null;
   }
@@ -270,10 +275,21 @@ export class Constellation {
     this.recolor();
   }
 
-  /** Filtre : 'all' | 'orphans' | 'cited' | 'big'. */
-  setFilter(kind) {
+  /** Filtre : 'all' | 'orphans' | 'cited' | 'big' | 'recent' | 'forgotten' | 'tag' (avec `tag`). */
+  setFilter(kind, tag = null) {
     this.filter = kind;
+    this.tag = tag ? tag.toLowerCase() : null;
     this.recolor();
+  }
+
+  /** Date limite du mode « Histoire » (null = tout le vault). */
+  setCutoff(ms) {
+    this.cutoff = ms;
+    this.recolor();
+  }
+
+  born(nd) {
+    return this.cutoff === null || !nd.created || nd.created <= this.cutoff;
   }
 
   matches(nd) {
@@ -281,6 +297,9 @@ export class Constellation {
       case 'orphans': return !(nd._out || []).length && !(nd._in || []).length;
       case 'cited': return (nd._in || []).length >= 3;
       case 'big': return nd.rarity === 'legendaire' || nd.rarity === 'rare';
+      case 'recent': return (nd._ageRank ?? 1) <= 0.15;
+      case 'forgotten': return (nd._ageRank ?? 0) >= 0.75;
+      case 'tag': return (nd.tags || []).some(t => t.toLowerCase() === this.tag);
       default: return true;
     }
   }
@@ -291,20 +310,30 @@ export class Constellation {
     const onPath = this.path ? new Set(this.path) : null;
     this.notes.forEach((nd, i) => {
       let k;
-      if (onPath) k = onPath.has(nd) ? 1.8 : DIM;
+      if (!this.born(nd)) k = 0;   // pas encore créée : invisible
+      else if (onPath) k = onPath.has(nd) ? 1.8 : DIM;
       else {
         const on = this.matches(nd) && (!linked || linked.has(nd));
         k = on ? (linked && nd === this.focus ? 1.6 : 1) : DIM;
       }
       col.setXYZ(i, this.baseColors[i * 3] * k, this.baseColors[i * 3 + 1] * k, this.baseColors[i * 3 + 2] * k);
+      // Étiquette masquée pour les étoiles éteintes (pas encore créées, ou hors filtre).
+      this.proxies[i].userData.hidden = k <= DIM;
     });
     col.needsUpdate = true;
+    // Filaments : éteints tant que l'une des deux notes n'existe pas encore.
+    const lc = this.lines.geometry.attributes.color;
+    this.edges.forEach(([a, b], k) => {
+      const on = this.born(this.notes[a]) && this.born(this.notes[b]) ? 1 : 0;
+      for (let v = 0; v < 6; v++) lc.array[k * 6 + v] = this.lineBase[k * 6 + v] * on;
+    });
+    lc.needsUpdate = true;
     this.lines.material.opacity = this.path || this.focus ? 0.03 : this.filter === 'all' ? 0.1 : 0.04;
   }
 
   /** Nombre de notes retenues par le filtre courant. */
   count() {
-    return this.notes.filter(nd => this.matches(nd)).length;
+    return this.notes.filter(nd => this.born(nd) && this.matches(nd)).length;
   }
 
   dispose() {

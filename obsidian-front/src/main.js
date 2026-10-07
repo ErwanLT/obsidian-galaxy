@@ -106,6 +106,7 @@ function clearScene() {
     disposeTree(o);
   };
   if (constellation) {
+    stopHistory(false);
     constellation.dispose();
     constellation = null;
     constSelected = null;
@@ -472,6 +473,7 @@ function showInfoPanel(node) {
     onPath: () => search.openPicker(`Chemin depuis « ${node.name} » vers…`, entry => {
       if (entry.node.type === 'MARKDOWN_FILE') showPath(node, entry.node);
     }),
+    onTag: showTag,
   });
   openPanel();
 }
@@ -703,6 +705,7 @@ function enterConstellation() {
   );
   document.body.classList.add('is-constellation');
   document.getElementById('constellation-bar').hidden = false;
+  setupConstellationBar();
   setConstellationFilter('all');
   breadcrumb.innerHTML = '';
   updateBreadcrumb();
@@ -721,13 +724,77 @@ function toggleConstellation() {
   else enterConstellation();
 }
 
-function setConstellationFilter(kind) {
+function setConstellationFilter(kind, tag = null) {
   if (!constellation) return;
-  constellation.setFilter(kind);
+  stopHistory();
+  constellation.setFilter(kind, tag);
   document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
     b.classList.toggle('is-active', b.dataset.filter === kind);
   });
+  const select = document.getElementById('constellation-tag');
+  select.value = kind === 'tag' ? (tag || '').toLowerCase() : '';
+  select.classList.toggle('is-active', kind === 'tag');
   document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
+}
+
+/** Contrôles qui dépendent des champs du back récent (dates, tags) : masqués sinon. */
+function setupConstellationBar() {
+  const idx = universe._index;
+  const has = { dates: idx.hasDates, tags: idx.tags.length > 0, timeline: !!idx.timeline };
+  document.querySelectorAll('#constellation-bar [data-needs]').forEach(el => {
+    el.hidden = !has[el.dataset.needs];
+  });
+  const select = document.getElementById('constellation-tag');
+  select.length = 1;
+  for (const { tag, count } of idx.tags) select.add(new Option(`#${tag} (${count})`, tag.toLowerCase()));
+}
+
+/** Tag cliqué dans un panneau : on montre ses notes dans la constellation. */
+function showTag(tag) {
+  if (!constellation) enterConstellation();
+  selectStar(null);
+  setConstellationFilter('tag', tag);
+}
+
+// « Histoire » : les étoiles apparaissent dans l'ordre de création des notes.
+let historyAnim = null;
+const DATE_FMT = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+
+function playHistory() {
+  const span = universe._index.timeline;
+  if (!constellation || !span) return;
+  if (historyAnim) {
+    stopHistory();
+    return;
+  }
+  constellation.setFilter('all');
+  const btn = document.getElementById('btn-history');
+  btn.classList.add('is-active');
+  btn.textContent = '■ Histoire';
+  const t0 = performance.now();
+  const DURATION = 14000;
+  const step = now => {
+    if (!historyAnim || !constellation) return;
+    const p = Math.min(1, (now - t0) / DURATION);
+    const at = span.from + (span.to - span.from) * p;
+    constellation.setCutoff(at);
+    document.getElementById('constellation-count').textContent = `${DATE_FMT.format(at)} · ${constellation.count()} notes`;
+    if (p < 1) historyAnim = requestAnimationFrame(step);
+    else stopHistory(false);
+  };
+  historyAnim = requestAnimationFrame(step);
+}
+
+function stopHistory(reset = true) {
+  if (historyAnim) cancelAnimationFrame(historyAnim);
+  historyAnim = null;
+  const btn = document.getElementById('btn-history');
+  btn.classList.remove('is-active');
+  btn.textContent = '▶ Histoire';
+  if (constellation && reset) {
+    constellation.setCutoff(null);
+    document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
+  }
 }
 
 /** Chemin le plus court entre deux notes, affiché dans la constellation. */
@@ -1259,6 +1326,11 @@ async function init() {
   document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
     b.addEventListener('click', () => setConstellationFilter(b.dataset.filter));
   });
+  document.getElementById('constellation-tag')?.addEventListener('change', e => {
+    if (e.target.value) setConstellationFilter('tag', e.target.value);
+    else setConstellationFilter('all');
+  });
+  document.getElementById('btn-history')?.addEventListener('click', playHistory);
   document.getElementById('btn-exit-constellation')?.addEventListener('click', exitConstellation);
 
   // ── Recherche ──
