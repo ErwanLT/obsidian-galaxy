@@ -312,15 +312,17 @@ function viewBounds() {
   return { cx, cz, radius: radius || 60 };
 }
 
-const CAM_ELEV = 0.34;   // hauteur relative de la caméra — vue en plongée
+// Hauteur relative de la caméra (vue en plongée). En portrait, on plonge davantage :
+// le plan des orbites s'étale alors en hauteur au lieu d'une fine bande.
+const camElev = () => (renderer && renderer.w < renderer.h ? 0.62 : 0.34);
 const FRAME_FILL = 0.88; // fraction du cadre occupée (laisse la marge des labels)
 
 /** Position de caméra à la distance `d` du centre visé, inclinaison constante. */
 function camPosAt(cx, cz, d) {
   return new THREE.Vector3(
     cx,
-    d * CAM_ELEV,
-    cz + d * Math.sqrt(1 - CAM_ELEV * CAM_ELEV),
+    d * camElev(),
+    cz + d * Math.sqrt(1 - camElev() * camElev()),
   );
 }
 
@@ -390,6 +392,7 @@ function enterNode(node) {
   navigationStack.push({ node: currentNode, camera: savedCamera, level: currentLevel });
 
   // Plongée : la caméra fonce dans l'astre, puis le système apparaît depuis son soleil.
+  leavingCamera = cameraSnapshot();
   const obj = currentObjects.find(o => o.userData.node === node);
   const open = () => {
     buildDirectoryView(node);
@@ -407,22 +410,14 @@ function enterNode(node) {
   renderer.flyTo(wp.clone().addScaledVector(toCam, close), wp, 480, open);
 }
 
+/**
+ * Retour : le même historique que le bouton précédent du navigateur (chaque
+ * étape mémorise sa caméra). Arrivé au début de la session, on remonte d'un
+ * niveau dans l'arborescence à la place.
+ */
 function goBack() {
-  if (navigationStack.length === 0) return;
-  const prev = navigationStack.pop();
-
-  if (prev.level === 'root' || !prev.node) {
-    buildRootView(universe);
-  } else {
-    buildDirectoryView(prev.node);
-  }
-
-  if (prev.camera) {
-    renderer.flyTo(prev.camera.pos, prev.camera.target, 900);
-  } else {
-    // Entrée synthétique (venue de la recherche) : pas de caméra à restaurer.
-    frameCurrentView(900);
-  }
+  if (histIndex() > 0) history.back();
+  else if (navigationStack.length > 0) goBackTo(navigationStack.length - 1);
 }
 
 /** Remonte d'un coup à l'entrée `i` de la pile : une seule reconstruction, un seul vol. */
@@ -443,7 +438,7 @@ function resetToRoot() {
 }
 
 function updateBackButtonState() {
-  if (btnBack) btnBack.disabled = navigationStack.length === 0;
+  if (btnBack) btnBack.disabled = histIndex() === 0 && navigationStack.length === 0;
   if (btnReset) btnReset.disabled = navigationStack.length === 0;
 }
 
@@ -468,8 +463,12 @@ function showInfoPanel(node) {
   });
   infoPanel.classList.remove('panel-hidden');
   infoPanel.classList.add('panel-visible');
-  // Recentre la scène dans l'espace laissé libre à gauche du panneau.
-  if (renderer) renderer.setViewShift(window.innerWidth > 768 ? 176 : 0);
+  // Recentre la scène dans l'espace laissé libre : à gauche du panneau sur
+  // grand écran, au-dessus du tiroir (52 % de la hauteur) sur mobile.
+  if (renderer) {
+    if (window.innerWidth > 768) renderer.setViewShift(176, 0);
+    else renderer.setViewShift(0, Math.round(window.innerHeight * 0.24));
+  }
 }
 
 function hideInfoPanel() {
@@ -514,6 +513,8 @@ function updateBreadcrumb() {
 
   if (constellation) addItem('Constellation', null, null);
   else if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
+  // Le dossier courant (en fin de fil) doit rester visible, même sur petit écran.
+  breadcrumb.scrollLeft = breadcrumb.scrollWidth;
 }
 
 // ─── Raycasting / Interaction ─────────────────────────────────────────────────
@@ -687,7 +688,7 @@ function enterConstellation() {
   setConstellationFilter('all');
   breadcrumb.innerHTML = '';
   updateBreadcrumb();
-  if (!restoringUrl && location.hash !== CONSTELLATION_HASH) history.pushState(null, '', CONSTELLATION_HASH);
+  setHash(CONSTELLATION_HASH);
 }
 
 function exitConstellation() {
@@ -727,15 +728,43 @@ function selectStar(note) {
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
-function syncUrl(node, replace = false) {
-  if (!universe || !universe._index || holdUrl) return;
-  const h = hashFor(node, universe._index.vaultDir);
-  if (location.hash === h) return;
-  if (replace || restoringUrl) history.replaceState(null, '', h);
-  else history.pushState(null, '', h);
+// Historique : chaque entrée porte son rang (i) et la caméra au moment où on l'a quittée.
+// Caméra à mémoriser pour l'étape qu'on quitte, capturée avant une plongée
+// (sinon on enregistrerait la caméra déjà rentrée dans l'astre).
+let leavingCamera = null;
+
+function cameraSnapshot() {
+  return { pos: renderer.camera.position.toArray(), target: renderer.controls.target.toArray() };
 }
 
-function navigateFromUrl() {
+function histIndex() {
+  return (history.state && history.state.i) || 0;
+}
+
+function setHash(h, replace = false) {
+  if (location.hash === h) return;
+  if (replace || restoringUrl) {
+    history.replaceState({ ...(history.state || {}), i: histIndex() }, '', h);
+  } else {
+    if (renderer) {
+      history.replaceState({
+        ...(history.state || {}),
+        i: histIndex(),
+        cam: leavingCamera || cameraSnapshot(),
+      }, '', location.hash || '#/');
+    }
+    leavingCamera = null;
+    history.pushState({ i: histIndex() + 1 }, '', h);
+  }
+  updateBackButtonState();
+}
+
+function syncUrl(node, replace = false) {
+  if (!universe || !universe._index || holdUrl) return;
+  setHash(hashFor(node, universe._index.vaultDir), replace);
+}
+
+function navigateFromUrl(cam = null) {
   const node = nodeForHash(location.hash, universe && universe._index);
   restoringUrl = true;
   try {
@@ -750,8 +779,13 @@ function navigateFromUrl() {
     } else {
       revealNode({ node, ancestors: ancestorsOf(node) }, { panel: false });
     }
+    // Retour dans l'historique : on retrouve la caméra telle qu'on l'avait laissée.
+    if (cam) {
+      renderer.flyTo(new THREE.Vector3(...cam.pos), new THREE.Vector3(...cam.target), 900);
+    }
   } finally {
     restoringUrl = false;
+    updateBackButtonState();
   }
 }
 
@@ -767,10 +801,30 @@ function closePanel() {
 
 // ─── Animations ───────────────────────────────────────────────────────────────
 
-const clock = { start: performance.now() };
+// Horloge de simulation : les orbites peuvent ralentir (survol), s'arrêter
+// (Espace) ou tourner au ralenti si le système demande moins d'animations.
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let simT = 0;
+let simRate = 1;
+let lastFrame = null;
+let orbitsPaused = false;
+
+function advanceSim(time) {
+  const dt = lastFrame === null ? 0 : Math.min(0.1, (time - lastFrame) / 1000);
+  lastFrame = time;
+  const target = orbitsPaused ? 0 : (hoveredObject ? 0.15 : 1) * (reducedMotion ? 0.3 : 1);
+  simRate += (target - simRate) * Math.min(1, dt * 6);
+  simT += dt * simRate;
+  return simT;
+}
+
+function toggleOrbits() {
+  orbitsPaused = !orbitsPaused;
+  document.getElementById('pause-pill').hidden = !orbitsPaused;
+}
 
 function animateObjects(time) {
-  const t = (time - clock.start) * 0.001;
+  const t = advanceSim(time);
 
   currentObjects.forEach((obj, i) => {
     const vt = obj.userData?.node?.visualType;
@@ -799,7 +853,7 @@ function animateObjects(time) {
       case VisualType.GALAXY:
         // Le disque tourne autour de son propre axe (incliné) : les bras sont des
         // ondes de densité, ils ne « coulent » pas vers l'extérieur.
-        if (obj.userData.spin) obj.userData.spin.rotation.y = t * (isClickable ? 0.03 : 0.01);
+        (obj.userData.spins || []).forEach((sp, k) => { sp.rotation.y = t * (isClickable ? 0.03 : 0.01) * (1 + (k % 3) * 0.3); });
         break;
       case VisualType.STAR:
         obj.rotation.y = isClickable ? (t * 0.04 + i * 0.7) : (t * 0.005);
@@ -980,7 +1034,7 @@ function startWith(data) {
   buildRootView(universe);
   restoringUrl = false;
   if (initial && initial !== '#/') {
-    history.replaceState(null, '', initial);
+    history.replaceState({ i: 0 }, '', initial);
     navigateFromUrl();
   } else {
     frameCurrentView(1600);   // se joue pendant le fondu de l'écran de chargement
@@ -1024,7 +1078,7 @@ async function init() {
   }
   renderer = new GalaxyRenderer(canvas);
   links = new LinkGraph(renderer.scene, document.getElementById('portal-layer'), onPortal);
-  window.addEventListener('popstate', () => { if (universe) navigateFromUrl(); });
+  window.addEventListener('popstate', e => { if (universe) navigateFromUrl(e.state && e.state.cam); });
   setLoadingProgress(30, "Connexion à l'API obsidian-back…");
 
   await loadUniverse('real');
@@ -1072,6 +1126,7 @@ async function init() {
     switch (e.key) {
       case 'Escape':    closePanel(); break;
       case 'g': case 'G': toggleConstellation(); break;
+      case ' ': e.preventDefault(); toggleOrbits(); break;
       case 'ArrowRight': e.preventDefault(); cycleSelection(1); break;
       case 'ArrowLeft':  e.preventDefault(); cycleSelection(-1); break;
       case 'Enter':

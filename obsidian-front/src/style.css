@@ -168,7 +168,11 @@ html, body {
 .hud-divider { width: 1px; height: 24px; background: var(--stroke-2); flex-shrink: 0; }
 
 /* Breadcrumb */
-#breadcrumb { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow: hidden; }
+#breadcrumb {
+  display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+}
+#breadcrumb::-webkit-scrollbar { display: none; }
 .bc-item {
   display: flex; align-items: center; gap: 6px;
   font-size: .82rem; font-weight: 400; color: var(--text-mid);
@@ -716,4 +720,46 @@ body.is-constellation #legend { display: none; }
 @media (max-width: 768px) {
   #constellation-bar { bottom: 76px; max-width: calc(100% - 24px); overflow-x: auto; }
   #constellation-bar .cb-title, #constellation-bar .cb-count { display: none; }
+}
+
+.pill {
+  position: absolute;
+  top: 82px;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 500 12px 'Outfit', sans-serif;
+  color: var(--text-hi);
+  background: var(--surface-2);
+  border: 1px solid var(--stroke-2);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+  pointer-events: none;
+}
+
+.pill[hidden] { display: none; }
+
+.pill kbd {
+  font: 400 11px 'Space Mono', monospace;
+  color: var(--text-mid);
+}
+
+/* ── Légende : repères ajoutés ──────────────────────────────── */
+.leg-sep { height: 1px; margin: 4px 0; background: var(--stroke-1); }
+
+.leg-swatch { width: 18px; height: 7px; border-radius: var(--r-pill); flex-shrink: 0; }
+
+/* Couleur de corps noir : naine rouge (peu de notes) → étoile blanc-bleu (beaucoup). */
+.leg-temp { background: linear-gradient(90deg, #ffb46b, #fff1e0, #cad8ff); }
+
+.leg-link { height: 2px; background: #34D399; box-shadow: 0 0 6px #34D399; }
+
+.leg-dot.leg-rare   { background: #60A5FA; box-shadow: 0 0 7px #60A5FA; }
+.leg-dot.leg-legend { background: #C084FC; box-shadow: 0 0 7px #C084FC; }
+
+.leg-portal {
+  width: 18px;
+  text-align: center;
+  font-size: .75rem;
+  color: var(--cyan-l);
+  flex-shrink: 0;
 }
