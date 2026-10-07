@@ -838,3 +838,62 @@ body.is-constellation #legend { display: none; }
   border-radius: 5px;
   background: var(--stroke-1);
 }
+
+.pill-tour { top: 118px; color: var(--cyan-l); max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Mini-carte ─────────────────────────────────────────────── */
+#minimap {
+  position: absolute;
+  top: 82px;
+  left: 16px;
+  padding: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--stroke-1);
+  border-radius: var(--r-lg);
+  backdrop-filter: var(--blur-1);
+  -webkit-backdrop-filter: var(--blur-1);
+  box-shadow: var(--elev-1);
+  pointer-events: all;
+}
+
+#minimap svg { display: block; }
+
+#minimap line { stroke: rgba(167, 139, 250, .22); stroke-width: 1; }
+#minimap line.on-path { stroke: var(--cyan-l); stroke-width: 1.6; }
+
+#minimap circle {
+  fill: rgba(203, 213, 225, .55);
+  cursor: pointer;
+  transition: fill var(--ease);
+}
+
+#minimap circle:hover { fill: #fff; }
+#minimap circle.on-path { fill: var(--cyan-l); }
+#minimap circle.current { fill: #fff; filter: drop-shadow(0 0 4px var(--cyan)); }
+
+body.is-constellation #minimap { opacity: .5; }
+
+@media (max-width: 768px), (max-height: 620px) {
+  #minimap { display: none; }
+}
+
+/* La colonne de gauche empile mini-carte, outils et légende sans chevauchement. */
+@media (min-width: 769px) and (min-height: 621px) {
+  #left-toolbar { top: 270px; transform: none; }
+}
+
+#legend { pointer-events: all; }
+#legend .leg-item, #legend .leg-sep { display: none; }
+#legend.is-open .leg-item { display: flex; }
+#legend.is-open .leg-sep { display: block; }
+
+.legend-title {
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+#legend.is-open .legend-title span { display: inline-block; transform: rotate(90deg); }

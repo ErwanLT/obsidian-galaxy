@@ -8,6 +8,7 @@ import { esc, dot } from './dom.js';
 import { SearchPalette } from './search.js';
 import { renderPanel, renderPathPanel } from './panel.js';
 import { shortestPath } from './graph.js';
+import { MiniMap } from './minimap.js';
 import { LabelLayer } from './labels.js';
 import { LinkGraph } from './links.js';
 import { hashFor, nodeForHash } from './url.js';
@@ -61,6 +62,11 @@ const search = new SearchPalette(
   entry => (entry.node.type === 'MARKDOWN_FILE' ? goToNote(entry.node) : revealNode(entry)),
 );
 const labels = new LabelLayer(document.getElementById('label-layer'));
+const minimap = new MiniMap(document.getElementById('minimap'), node => {
+  stopTour();
+  if (node) revealNode({ node, ancestors: ancestorsOf(node) }, { panel: false });
+  else resetToRoot();
+});
 
 // Taille minimale à l'écran (rayon en px) d'une lune : une note ne doit jamais disparaître.
 const MOON_MIN_PX = 3.5;
@@ -525,6 +531,7 @@ function updateBreadcrumb() {
   else if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
   // Le dossier courant (en fin de fil) doit rester visible, même sur petit écran.
   breadcrumb.scrollLeft = breadcrumb.scrollWidth;
+  minimap.setCurrent(constellation ? null : currentNode);
 }
 
 // ─── Raycasting / Interaction ─────────────────────────────────────────────────
@@ -999,6 +1006,54 @@ function recenter() {
   frameCurrentView(700);
 }
 
+// ─── Visite guidée ────────────────────────────────────────────────────────────
+
+let tour = null;
+
+function startTour() {
+  if (!universe) return;
+  stopTour();
+  const hubs = universe._index.notes.slice().sort((a, b) => b._in.length - a._in.length).slice(0, 5);
+  const steps = [
+    { label: 'Vue d’ensemble du vault', run: resetToRoot, ms: 5000 },
+    ...hubs.map(n => ({ label: `Note très citée : ${n.name}`, run: () => goToNote(n), ms: 6500 })),
+  ];
+  if (hubs.length > 1) {
+    steps.push({ label: 'Comment elles se relient', run: () => showPath(hubs[0], hubs[hubs.length - 1]), ms: 7000 });
+  }
+  steps.push({ label: 'Tout le vault en constellation', run: () => { closePanel(); enterConstellation(); }, ms: 7000 });
+  tour = { steps, i: -1, timer: 0 };
+  nextTourStep();
+}
+
+function nextTourStep() {
+  if (!tour) return;
+  tour.i++;
+  if (tour.i >= tour.steps.length) {
+    stopTour();
+    return;
+  }
+  const step = tour.steps[tour.i];
+  // Les étapes ne remplissent pas l'historique : on remplace l'entrée courante.
+  restoringUrl = true;
+  try {
+    step.run();
+  } finally {
+    restoringUrl = false;
+  }
+  const pill = document.getElementById('tour-pill');
+  pill.hidden = false;
+  pill.querySelector('.tour-step').textContent = `${tour.i + 1}/${tour.steps.length} · ${step.label}`;
+  tour.timer = setTimeout(nextTourStep, step.ms);
+}
+
+function stopTour() {
+  if (!tour) return;
+  clearTimeout(tour.timer);
+  tour = null;
+  document.getElementById('tour-pill').hidden = true;
+}
+
 function isHelpOpen() {
   return !document.getElementById('help-overlay').classList.contains('hidden');
 }
@@ -1096,6 +1151,7 @@ function loop(time) {
 function startWith(data) {
   universe = data;
   search.setUniverse(universe);
+  minimap.setUniverse(universe);
   const initial = location.hash;
   restoringUrl = true;
   buildRootView(universe);
@@ -1170,6 +1226,29 @@ async function init() {
     if (e.target.id === 'help-overlay' || e.target.closest('.help-close')) toggleHelp();
   });
   document.getElementById('btn-copy-link')?.addEventListener('click', copyLink);
+  // Légende : dépliée d'office seulement s'il y a la place.
+  const legend = document.getElementById('legend');
+  const btnLegend = document.getElementById('btn-legend');
+  const setLegend = open => {
+    legend.classList.toggle('is-open', open);
+    btnLegend.setAttribute('aria-expanded', String(open));
+  };
+  setLegend(window.innerHeight > 900);
+  btnLegend.addEventListener('click', () => setLegend(!legend.classList.contains('is-open')));
+  document.getElementById('btn-tool-tour')?.addEventListener('click', e => {
+    e.stopPropagation();
+    if (tour) stopTour();
+    else startTour();
+  });
+  // Toute interaction de l'utilisateur interrompt la visite guidée.
+  const interrupt = e => {
+    if (tour && !e.target.closest?.('#btn-tool-tour')) stopTour();
+  };
+  window.addEventListener('pointerdown', interrupt, true);
+  window.addEventListener('wheel', interrupt, { capture: true, passive: true });
+  window.addEventListener('keydown', e => {
+    if (tour && e.key !== 'v' && e.key !== 'V') stopTour();
+  }, true);
 
   // ── Toolbar ──
   document.getElementById('btn-tool-zoom-in')?.addEventListener('click', () => zoomBy(0.25));
@@ -1203,6 +1282,7 @@ async function init() {
       case 'Escape':    closePanel(); break;
       case 'g': case 'G': toggleConstellation(); break;
       case '?': toggleHelp(); break;
+      case 'v': case 'V': if (tour) stopTour(); else startTour(); break;
       case ' ': e.preventDefault(); toggleOrbits(); break;
       case 'ArrowRight': e.preventDefault(); cycleSelection(1); break;
       case 'ArrowLeft':  e.preventDefault(); cycleSelection(-1); break;
