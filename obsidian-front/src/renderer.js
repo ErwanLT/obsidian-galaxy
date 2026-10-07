@@ -26,6 +26,8 @@ export class GalaxyRenderer {
     this.canvas = canvas;
     this.viewShift = 0;
     this.viewShiftTarget = 0;
+    this.viewShiftY = 0;
+    this.viewShiftYTarget = 0;
     this._measure();
     this._setup();
     window.addEventListener('resize', () => this._resize());
@@ -259,13 +261,14 @@ export class GalaxyRenderer {
    * occupe la droite) — animé dans tick(). Les clics restent justes : le
    * raycaster utilise la même matrice de projection.
    */
-  setViewShift(px) {
+  setViewShift(px, py = 0) {
     this.viewShiftTarget = px;
+    this.viewShiftYTarget = py;
   }
 
   _applyViewShift() {
-    if (Math.abs(this.viewShift) < 0.5) this.camera.clearViewOffset();
-    else this.camera.setViewOffset(this.w, this.h, this.viewShift, 0, this.w, this.h);
+    if (Math.abs(this.viewShift) < 0.5 && Math.abs(this.viewShiftY) < 0.5) this.camera.clearViewOffset();
+    else this.camera.setViewOffset(this.w, this.h, this.viewShift, this.viewShiftY, this.w, this.h);
   }
 
   _resize() {
@@ -330,9 +333,11 @@ export class GalaxyRenderer {
 
   tick(t) {
     if (this.stars) this.stars.rotation.y = t * 0.00003;
-    if (this.viewShift !== this.viewShiftTarget) {
+    if (this.viewShift !== this.viewShiftTarget || this.viewShiftY !== this.viewShiftYTarget) {
       this.viewShift += (this.viewShiftTarget - this.viewShift) * 0.12;
+      this.viewShiftY += (this.viewShiftYTarget - this.viewShiftY) * 0.12;
       if (Math.abs(this.viewShift - this.viewShiftTarget) < 0.5) this.viewShift = this.viewShiftTarget;
+      if (Math.abs(this.viewShiftY - this.viewShiftYTarget) < 0.5) this.viewShiftY = this.viewShiftYTarget;
       this._applyViewShift();
     }
     this.controls.update();

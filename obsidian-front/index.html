@@ -183,14 +183,17 @@
     <!-- ── Legend (elevation 1) ── -->
     <div id="legend">
       <h3 class="legend-title">Légende</h3>
-      <div class="leg-item"><span class="leg-dot" data-t="supercluster"></span>Superamas</div>
-      <div class="leg-item"><span class="leg-dot" data-t="cluster"></span>Amas de galaxies</div>
-      <div class="leg-item"><span class="leg-dot" data-t="galaxy"></span>Galaxie</div>
-      <div class="leg-item"><span class="leg-dot" data-t="star"></span>Étoile / Système stellaire</div>
-      <div class="leg-item"><span class="leg-dot" data-t="planet"></span>Planète</div>
-      <div class="leg-item"><span class="leg-dot" data-t="dwarf-planet"></span>Planète naine</div>
-      <div class="leg-item"><span class="leg-dot" data-t="small-body"></span>Petit corps</div>
-      <div class="leg-item"><span class="leg-dot" data-t="moon"></span>Lune / Note</div>
+      <div class="leg-item"><span class="leg-dot" data-t="supercluster"></span>Superamas · dossier racine</div>
+      <div class="leg-item"><span class="leg-dot" data-t="cluster"></span>Amas · sous-dossier</div>
+      <div class="leg-item"><span class="leg-dot" data-t="galaxy"></span>Galaxie · 3ᵉ niveau</div>
+      <div class="leg-item"><span class="leg-dot" data-t="planet"></span>Planète · dossier profond</div>
+      <div class="leg-item"><span class="leg-dot" data-t="moon"></span>Lune · note</div>
+      <div class="leg-sep" aria-hidden="true"></div>
+      <div class="leg-item"><span class="leg-swatch leg-temp"></span>Soleil : peu → beaucoup de notes</div>
+      <div class="leg-item"><span class="leg-dot leg-rare"></span>Halo bleu · note rare</div>
+      <div class="leg-item"><span class="leg-dot leg-legend"></span>Halo violet · note légendaire</div>
+      <div class="leg-item"><span class="leg-swatch leg-link"></span>Lien entre notes</div>
+      <div class="leg-item"><span class="leg-portal">↗</span>Lien vers un autre dossier</div>
     </div>
 
     <!-- ── Bottom-right cluster (elevation 2) ── -->
@@ -202,6 +205,8 @@
         <svg class="ico"><use href="#i-orbit"/></svg>
       </button>
     </div>
+
+    <div id="pause-pill" class="pill" hidden>⏸ Orbites en pause · <kbd>Espace</kbd></div>
 
     <!-- ── Constellation : filtres ── -->
     <div id="constellation-bar" hidden>
@@ -221,6 +226,7 @@
       <span><kbd>Clic</kbd> Détails</span>
       <span><kbd>Double-clic</kbd> Entrer</span>
       <span><kbd>G</kbd> Constellation</span>
+      <span><kbd>Espace</kbd> Pause</span>
     </div>
 
   </div>
