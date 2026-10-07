@@ -52,12 +52,17 @@ export class LabelLayer {
     if (!this.visible || !this.items.length) return;
     const pxPerUnit = size.h / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
 
-    const candidates = [];
+    // Mesures d'abord, écritures ensuite : alterner lecture de taille et
+    // modification du DOM forçait une mise en page par étiquette.
     for (const it of this.items) {
       if (!it.w) {
         it.w = it.el.offsetWidth;
         it.h = it.el.offsetHeight;
       }
+    }
+
+    const candidates = [];
+    for (const it of this.items) {
       it.obj.getWorldPosition(_v);
       const dist = _v.distanceTo(camera.position);
       _v.project(camera);

@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { fetchUniverse, demoUniverse, ancestorsOf, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
+import { fetchUniverse, demoUniverse, ancestorsOf, VisualType, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
 import { createBody, createStar, createOrbit, disposeTree, seededRandom, nodeSeed, bodyRadius } from './objects.js';
 import { discLayout, orbitLayout, placeMoons, orbitPoint, setOrbit, orbitShape } from './layout.js';
@@ -1023,7 +1023,7 @@ function copyWithSelection(text) {
 
 async function copyLink() {
   const btn = document.getElementById('btn-copy-link');
-  let ok = false;
+  let ok;
   try {
     await navigator.clipboard.writeText(location.href);
     ok = true;
@@ -1223,8 +1223,8 @@ async function init() {
   requestAnimationFrame(loop);
 }
 
-// Accès de debug (console) à l'état de la scène.
-window.__obsidianGalaxy = {
+// Accès de debug (console) à l'état de la scène — en développement seulement.
+if (import.meta.env.DEV) window.__obsidianGalaxy = {
   get renderer() { return renderer; },
   get objects() { return currentObjects; },
   get node() { return currentNode; },

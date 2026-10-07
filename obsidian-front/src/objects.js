@@ -210,6 +210,7 @@ function galaxyBody(rnd, radius, N, glowK = 1) {
   const cDisc = new THREE.Color(0xF2E6D8);
   const cYoung = new THREE.Color(0xA9C4FF);
   const cHII = new THREE.Color(0xFF6FA8);
+  const c = new THREE.Color();
   const gauss = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;
 
   for (let i = 0; i < N; i++) {
@@ -223,9 +224,10 @@ function galaxyBody(rnd, radius, N, glowK = 1) {
     const z = Math.sin(theta) * r;
     const y = gauss() * radius * (r < bulge ? 0.12 : 0.025);
     const k = r / radius;
-    const c = r < bulge * 1.4
-      ? cBulge.clone().lerp(cDisc, r / (bulge * 1.4))
-      : inArm ? cDisc.clone().lerp(cYoung, Math.min(1, k * 1.4)) : cDisc.clone().multiplyScalar(0.55);
+    // Couleur calculée dans un objet réutilisé (pas d'allocation par particule).
+    if (r < bulge * 1.4) c.copy(cBulge).lerp(cDisc, r / (bulge * 1.4));
+    else if (inArm) c.copy(cDisc).lerp(cYoung, Math.min(1, k * 1.4));
+    else c.copy(cDisc).multiplyScalar(0.55);
     const b = 0.55 + 0.45 * rnd();
     stars.pos.push(x, y, z);
     stars.col.push(c.r * b, c.g * b, c.b * b);
@@ -773,6 +775,33 @@ export function nodeSeed(node, salt = '') {
 const TEXTURE_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'bumpMap'];
 
 /**
+ * Cache LRU des textures générées (surfaces, nuages, anneaux) : revisiter un
+ * dossier ne recalcule plus ses textures pixel par pixel. Les textures en cache
+ * sont « partagées » (disposeTree les épargne) ; la plus ancienne est libérée
+ * quand le cache déborde — bien au-delà du nombre de textures d'une vue.
+ */
+const TEX_CACHE = new Map();
+const TEX_CACHE_MAX = 150;
+
+function cachedTexture(key, make) {
+  const hit = TEX_CACHE.get(key);
+  if (hit) {
+    TEX_CACHE.delete(key);
+    TEX_CACHE.set(key, hit);
+    return hit;
+  }
+  const tex = make();
+  tex.userData.shared = true;
+  TEX_CACHE.set(key, tex);
+  if (TEX_CACHE.size > TEX_CACHE_MAX) {
+    const [oldKey, old] = TEX_CACHE.entries().next().value;
+    TEX_CACHE.delete(oldKey);
+    old.dispose();
+  }
+  return tex;
+}
+
+/**
  * Libère la mémoire GPU d'un objet et de ses descendants (géométries, matériaux,
  * textures générées). Les textures partagées entre astres sont conservées.
  */
@@ -908,6 +937,10 @@ function _planetPixel(lon, lat, x, y, s, archetype) {
 
 /** Texture de surface 256×128 d'une planète, unique par seed. */
 function _makePlanetTexture(seed, archetype) {
+  return cachedTexture(`planet:${seed}:${archetype}`, () => _buildPlanetTexture(seed, archetype));
+}
+
+function _buildPlanetTexture(seed, archetype) {
   const W = 256, H = 128;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -931,6 +964,10 @@ function _makePlanetTexture(seed, archetype) {
 
 /** Couche de nuages : alpha blanc là où le bruit dépasse le seuil. */
 function _makeCloudTexture(seed) {
+  return cachedTexture(`cloud:${seed}`, () => _buildCloudTexture(seed));
+}
+
+function _buildCloudTexture(seed) {
   const W = 256, H = 128;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -1112,6 +1149,10 @@ function _makeDiscTexture() {
 
 /** Bandes d'anneau (façon Saturne) : densité variable, divisions sombres. */
 function _makeRingTexture(seed) {
+  return cachedTexture(`ring:${seed}`, () => _buildRingTexture(seed));
+}
+
+function _buildRingTexture(seed) {
   const W = 256;
   const c = document.createElement('canvas');
   c.width = W;
@@ -1216,6 +1257,10 @@ function _moonPixel(lon, lat, s) {
 
 /** Texture de surface d'une lune (128×64), unique par seed. */
 function _makeMoonTexture(seed) {
+  return cachedTexture(`moon:${seed}`, () => _buildMoonTexture(seed));
+}
+
+function _buildMoonTexture(seed) {
   const W = 128, H = 64;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
