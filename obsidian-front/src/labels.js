@@ -63,6 +63,10 @@ export class LabelLayer {
 
     const candidates = [];
     for (const it of this.items) {
+      if (it.obj.userData.hidden) {
+        this.hide(it);
+        continue;
+      }
       it.obj.getWorldPosition(_v);
       const dist = _v.distanceTo(camera.position);
       _v.project(camera);

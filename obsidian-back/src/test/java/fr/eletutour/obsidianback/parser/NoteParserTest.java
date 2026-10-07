@@ -32,7 +32,7 @@ class NoteParserTest {
     void extraitLisibleSansSyntaxeMarkdown() {
         String md = "---\ntags: [a]\n---\n# Mon titre\n\nVoir [[Autre note|cette note]] et [le site](https://x.fr), **gras** et `code`.\n- un point\n> une citation";
         NoteParser.ParsedNote n = NoteParser.parse(md);
-        assertThat(n.excerpt()).isEqualTo("Mon titre Voir cette note et le site, gras et . un point une citation");
+        assertThat(n.excerpt()).isEqualTo("Mon titre Voir cette note et le site, gras et code. un point une citation");
         assertThat(n.words()).isEqualTo(15);
     }
 

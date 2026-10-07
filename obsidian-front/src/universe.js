@@ -107,10 +107,25 @@ export function indexUniverse(data) {
       t._in.push(n);
     }
   }
+  // Ancienneté : rang de chaque note selon sa dernière modification (0 = la plus
+  // récente, 1 = la plus ancienne). Absent si le back ne fournit pas les dates.
+  const dated = notes.filter(n => n.modified > 0).sort((a, b) => b.modified - a.modified);
+  dated.forEach((n, i) => { n._ageRank = dated.length > 1 ? i / (dated.length - 1) : 0; });
+  const created = notes.map(n => n.created).filter(t => t > 0);
+  const timeline = created.length ? { from: Math.min(...created), to: Math.max(...created) } : null;
+  const tagCount = new Map();
+  for (const n of notes) {
+    for (const t of n.tags || []) {
+      const key = t.toLowerCase();
+      tagCount.set(key, { tag: t, count: (tagCount.get(key)?.count || 0) + 1 });
+    }
+  }
+  const tags = [...tagCount.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+
   // Racine du vault : dossier parent des premières entrées (sert aux URL courtes).
   const first = (data.children || []).find(c => c.path);
   const vaultDir = first ? first.path.replace(/[\\/][^\\/]*$/, '') : '';
-  data._index = { byPath, notes, vaultDir };
+  data._index = { byPath, notes, vaultDir, hasDates: dated.length > 0, timeline, tags };
   return data;
 }
 
@@ -144,9 +159,13 @@ export async function fetchUniverse() {
 
 /** Petit univers fictif, pour explorer sans le back. */
 export function demoUniverse() {
-  const md = (dir, name, kb, depth, links = []) => ({
+  const DAY = 86400000;
+  const now = Date.now();
+  const md = (dir, name, kb, depth, links = [], tags = [], ageDays = kb) => ({
     id: `${dir}/${name}`, name, path: `/demo/${dir}/${name}.md`, type: NodeType.MARKDOWN_FILE,
     depth, markdownCount: 0, size: kb * 1024, links: links.map(l => `/demo/${l}.md`), children: [],
+    tags, words: kb * 140, excerpt: `Note de démonstration « ${name} » : quelques lignes pour illustrer l'extrait affiché dans le panneau.`,
+    created: now - (ageDays + 30) * DAY, modified: now - ageDays * DAY,
   });
   const dir = (path, depth, children) => ({
     id: path, name: path.split('/').pop(), path: `/demo/${path}`, type: NodeType.DIRECTORY, depth,
@@ -157,17 +176,17 @@ export function demoUniverse() {
     name: 'Vault démo',
     children: [
       dir('Projets', 0, [
-        md('Projets', 'Roadmap', 24, 1, ['Projets/Idées', 'Lectures/Clean Code']),
+        md('Projets', 'Roadmap', 24, 1, ['Projets/Idées', 'Lectures/Clean Code'], ['projet', 'planning'], 2),
         md('Projets', 'Idées', 9, 1),
         dir('Projets/Galaxie', 1, [
-          md('Projets/Galaxie', 'Rendu 3D', 41, 2, ['Lectures/Shaders']),
+          md('Projets/Galaxie', 'Rendu 3D', 41, 2, ['Lectures/Shaders'], ['3d', 'projet'], 5),
           md('Projets/Galaxie', 'Navigation', 18, 2, ['Projets/Galaxie/Rendu 3D']),
           dir('Projets/Galaxie/Archives', 2, [md('Projets/Galaxie/Archives', 'V1', 6, 3)]),
         ]),
       ]),
       dir('Lectures', 0, [
         md('Lectures', 'Clean Code', 33, 1),
-        md('Lectures', 'Shaders', 57, 1, ['Projets/Galaxie/Rendu 3D']),
+        md('Lectures', 'Shaders', 57, 1, ['Projets/Galaxie/Rendu 3D'], ['3d', 'lecture'], 200),
         md('Lectures', 'DDD', 12, 1),
       ]),
       dir('Journal', 0, [md('Journal', '2026-10-07', 3, 1, ['Projets/Roadmap']), md('Journal', '2026-10-06', 4, 1)]),
