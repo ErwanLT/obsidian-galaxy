@@ -4,14 +4,15 @@ import fr.eletutour.obsidianback.configuration.ObsidianProperties;
 import fr.eletutour.obsidianback.model.NodeType;
 import fr.eletutour.obsidianback.model.SpaceNode;
 import fr.eletutour.obsidianback.model.Universe;
+import fr.eletutour.obsidianback.parser.NoteParser;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 @Service
@@ -20,6 +21,13 @@ public class UniverseService {
     private final List<String> exclude = List.of(".obsidian", "docs", "_assets");
 
     private final ObsidianProperties properties;
+
+    // Analyse des notes mise en cache : une note n'est relue que si sa date de
+    // modification ou sa taille a changé (l'analyse du texte est la partie coûteuse).
+    private record CachedNote(long modified, long size, NoteParser.ParsedNote parsed) {
+    }
+
+    private final Map<String, CachedNote> parsedCache = new ConcurrentHashMap<>();
 
     public UniverseService(ObsidianProperties properties) {
         this.properties = properties;
@@ -85,6 +93,10 @@ public class UniverseService {
                         .mapToLong(SpaceNode::size)
                         .sum();
 
+                long words = children.stream().mapToLong(SpaceNode::words).sum();
+                long created = children.stream().mapToLong(SpaceNode::created).filter(t -> t > 0).min().orElse(0);
+                long modified = children.stream().mapToLong(SpaceNode::modified).max().orElse(0);
+
                 return new SpaceNode(
                         UUID.randomUUID().toString(),
                         path.getFileName().toString(),
@@ -94,13 +106,19 @@ public class UniverseService {
                         markdownCount,
                         size,
                         List.of(),
-                        children
+                        children,
+                        List.of(),
+                        null,
+                        words,
+                        created,
+                        modified
                 );
             }
 
             if (isMarkdown(path)) {
-                long size = Files.size(path);
-                List<String> links = parseLinks(path, index);
+                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                NoteParser.ParsedNote parsed = parseCached(path, attrs);
+                List<String> links = resolveLinks(path, parsed.linkTargets(), index);
 
                 return new SpaceNode(
                         UUID.randomUUID().toString(),
@@ -109,9 +127,14 @@ public class UniverseService {
                         NodeType.MARKDOWN_FILE,
                         depth,
                         1,
-                        size,
+                        attrs.size(),
                         links,
-                        List.of()
+                        List.of(),
+                        parsed.tags(),
+                        parsed.excerpt(),
+                        parsed.words(),
+                        attrs.creationTime().toMillis(),
+                        attrs.lastModifiedTime().toMillis()
                 );
             }
             return null;
@@ -120,22 +143,34 @@ public class UniverseService {
         }
     }
 
-    private List<String> parseLinks(Path path, Map<String, String> index) {
-        List<String> links = new ArrayList<>();
+    private NoteParser.ParsedNote parseCached(Path path, BasicFileAttributes attrs) {
+        String key = path.toAbsolutePath().toString();
+        long modified = attrs.lastModifiedTime().toMillis();
+        CachedNote cached = parsedCache.get(key);
+        if (cached != null && cached.modified() == modified && cached.size() == attrs.size()) {
+            return cached.parsed();
+        }
+        NoteParser.ParsedNote parsed = NoteParser.parse(readQuietly(path));
+        parsedCache.put(key, new CachedNote(modified, attrs.size(), parsed));
+        return parsed;
+    }
+
+    private String readQuietly(Path path) {
         try {
-            String content = Files.readString(path);
-            // Pattern to match [[TargetNote]] or [[TargetNote|Alias]] or [[TargetNote#Header|Alias]]
-            Pattern pattern = Pattern.compile("\\[\\[([^\\]|#]+)(?:#[^\\]|]*)?(?:\\|[^\\]]*)?\\]\\]");
-            Matcher matcher = pattern.matcher(content);
-            while (matcher.find()) {
-                String target = matcher.group(1).trim();
-                String resolvedPath = resolveLink(target, index);
-                if (resolvedPath != null && !resolvedPath.equals(path.toAbsolutePath().toString())) {
-                    links.add(resolvedPath);
-                }
-            }
+            return Files.readString(path);
         } catch (IOException e) {
-            // Ignore
+            return "";
+        }
+    }
+
+    private List<String> resolveLinks(Path path, List<String> targets, Map<String, String> index) {
+        List<String> links = new ArrayList<>();
+        String self = path.toAbsolutePath().toString();
+        for (String target : targets) {
+            String resolvedPath = resolveLink(target, index);
+            if (resolvedPath != null && !resolvedPath.equals(self)) {
+                links.add(resolvedPath);
+            }
         }
         return links;
     }

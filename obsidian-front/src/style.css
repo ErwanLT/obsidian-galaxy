@@ -168,7 +168,11 @@ html, body {
 .hud-divider { width: 1px; height: 24px; background: var(--stroke-2); flex-shrink: 0; }
 
 /* Breadcrumb */
-#breadcrumb { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow: hidden; }
+#breadcrumb {
+  display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+}
+#breadcrumb::-webkit-scrollbar { display: none; }
 .bc-item {
   display: flex; align-items: center; gap: 6px;
   font-size: .82rem; font-weight: 400; color: var(--text-mid);
@@ -716,4 +720,233 @@ body.is-constellation #legend { display: none; }
 @media (max-width: 768px) {
   #constellation-bar { bottom: 76px; max-width: calc(100% - 24px); overflow-x: auto; }
   #constellation-bar .cb-title, #constellation-bar .cb-count { display: none; }
+}
+
+.pill {
+  position: absolute;
+  top: 82px;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 500 12px 'Outfit', sans-serif;
+  color: var(--text-hi);
+  background: var(--surface-2);
+  border: 1px solid var(--stroke-2);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+  pointer-events: none;
+}
+
+.pill[hidden] { display: none; }
+
+.pill kbd {
+  font: 400 11px 'Space Mono', monospace;
+  color: var(--text-mid);
+}
+
+/* ── Légende : repères ajoutés ──────────────────────────────── */
+.leg-sep { height: 1px; margin: 4px 0; background: var(--stroke-1); }
+
+.leg-swatch { width: 18px; height: 7px; border-radius: var(--r-pill); flex-shrink: 0; }
+
+/* Couleur de corps noir : naine rouge (peu de notes) → étoile blanc-bleu (beaucoup). */
+.leg-temp { background: linear-gradient(90deg, #ffb46b, #fff1e0, #cad8ff); }
+
+.leg-link { height: 2px; background: #34D399; box-shadow: 0 0 6px #34D399; }
+
+.leg-dot.leg-rare   { background: #60A5FA; box-shadow: 0 0 7px #60A5FA; }
+.leg-dot.leg-legend { background: #C084FC; box-shadow: 0 0 7px #C084FC; }
+
+.leg-portal {
+  width: 18px;
+  text-align: center;
+  font-size: .75rem;
+  color: var(--cyan-l);
+  flex-shrink: 0;
+}
+
+/* ── Panneau : actions secondaires ─────────────────────────── */
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.panel-mini {
+  flex: 1;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+#btn-copy-link[data-state="done"]::after { content: ' ✓'; color: var(--emerald-l); }
+#btn-copy-link[data-state="error"]::after { content: ' — impossible'; color: var(--rose); }
+
+#info-badge.path { color: #ffd27a; border-color: rgba(255, 210, 122, .45); }
+
+.btn-help { font: 600 15px 'Outfit', sans-serif; color: var(--text-mid); }
+
+/* ── Aide ───────────────────────────────────────────────────── */
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 450;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 1, 10, .55);
+  backdrop-filter: blur(4px);
+}
+
+#help-overlay.hidden { display: none; }
+
+.help-box {
+  width: min(460px, calc(100% - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--surface-3);
+  border: 1px solid var(--stroke-3);
+  border-radius: var(--r-xl);
+  box-shadow: var(--elev-4);
+  padding: 18px 20px;
+}
+
+.help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.help-head h2 { font: 600 16px 'Outfit', sans-serif; color: var(--text-hi); }
+
+.help-close {
+  font: inherit;
+  color: var(--text-lo);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.help-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font: 400 13px 'Outfit', sans-serif;
+}
+
+.help-list dt { color: var(--text-hi); white-space: nowrap; }
+.help-list dd { color: var(--text-mid); }
+
+.help-list kbd {
+  font: 400 11px 'Space Mono', monospace;
+  padding: 1px 5px;
+  border: 1px solid var(--stroke-2);
+  border-radius: 5px;
+  background: var(--stroke-1);
+}
+
+.pill-tour { top: 118px; color: var(--cyan-l); max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Mini-carte ─────────────────────────────────────────────── */
+#minimap {
+  position: absolute;
+  top: 82px;
+  left: 16px;
+  padding: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--stroke-1);
+  border-radius: var(--r-lg);
+  backdrop-filter: var(--blur-1);
+  -webkit-backdrop-filter: var(--blur-1);
+  box-shadow: var(--elev-1);
+  pointer-events: all;
+}
+
+#minimap svg { display: block; }
+
+#minimap line { stroke: rgba(167, 139, 250, .22); stroke-width: 1; }
+#minimap line.on-path { stroke: var(--cyan-l); stroke-width: 1.6; }
+
+#minimap circle {
+  fill: rgba(203, 213, 225, .55);
+  cursor: pointer;
+  transition: fill var(--ease);
+}
+
+#minimap circle:hover { fill: #fff; }
+#minimap circle.on-path { fill: var(--cyan-l); }
+#minimap circle.current { fill: #fff; filter: drop-shadow(0 0 4px var(--cyan)); }
+
+body.is-constellation #minimap { opacity: .5; }
+
+@media (max-width: 768px), (max-height: 620px) {
+  #minimap { display: none; }
+}
+
+/* La colonne de gauche empile mini-carte, outils et légende sans chevauchement. */
+@media (min-width: 769px) and (min-height: 621px) {
+  #left-toolbar { top: 270px; transform: none; }
+}
+
+#legend { pointer-events: all; }
+#legend .leg-item, #legend .leg-sep { display: none; }
+#legend.is-open .leg-item { display: flex; }
+#legend.is-open .leg-sep { display: block; }
+
+.legend-title {
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+#legend.is-open .legend-title span { display: inline-block; transform: rotate(90deg); }
+
+/* ── Panneau : extrait et tags ──────────────────────────────── */
+#info-excerpt {
+  margin: 10px 0 2px;
+  font: 400 13px/1.55 'Outfit', sans-serif;
+  color: var(--text-mid);
+  border-left: 2px solid var(--stroke-3);
+  padding-left: 10px;
+}
+
+#info-excerpt[hidden], #info-tags[hidden] { display: none; }
+
+#info-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.tag-chip {
+  font: 500 11px 'Space Mono', monospace;
+  color: var(--cyan-l);
+  background: rgba(6, 182, 212, .1);
+  border: 1px solid rgba(103, 232, 249, .3);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.tag-chip:hover { background: rgba(6, 182, 212, .22); }
+
+#constellation-bar select {
+  font: 500 12px 'Outfit', sans-serif;
+  color: var(--text-mid);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+#constellation-bar select:hover,
+#constellation-bar select.is-active { color: var(--text-hi); border-color: var(--stroke-3); }
+
+#constellation-bar select option { color: #111; }
+#constellation-bar [hidden] { display: none; }
+
+/* La barre s'est allongée (dates, tags, histoire) : elle défile au lieu de déborder. */
+#constellation-bar { max-width: calc(100% - 32px); overflow-x: auto; scrollbar-width: none; }
+#constellation-bar::-webkit-scrollbar { display: none; }
+@media (max-width: 1100px) {
+  #constellation-bar .cb-title { display: none; }
 }

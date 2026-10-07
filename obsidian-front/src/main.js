@@ -1,12 +1,14 @@
 import './style.css';
 import * as THREE from 'three';
-import { fetchUniverse, demoUniverse, ancestorsOf, VisualType, TYPE_LABEL, TYPE_COLOR } from './universe.js';
+import { fetchUniverse, demoUniverse, ancestorsOf, VisualType, TYPE_COLOR } from './universe.js';
 import { GalaxyRenderer } from './renderer.js';
 import { createBody, createStar, createOrbit, disposeTree, seededRandom, nodeSeed, bodyRadius } from './objects.js';
 import { discLayout, orbitLayout, placeMoons, orbitPoint, setOrbit, orbitShape } from './layout.js';
 import { esc, dot } from './dom.js';
 import { SearchPalette } from './search.js';
-import { renderPanel } from './panel.js';
+import { renderPanel, renderPathPanel } from './panel.js';
+import { shortestPath } from './graph.js';
+import { MiniMap } from './minimap.js';
 import { LabelLayer } from './labels.js';
 import { LinkGraph } from './links.js';
 import { hashFor, nodeForHash } from './url.js';
@@ -26,6 +28,7 @@ let constellation = null;    // vue globale du vault (null = vue système)
 let constellationReturn = null;
 let constSelected = null;    // repère de la note sélectionnée dans la constellation
 let constHovered = null;
+let currentPath = null;      // chemin affiché dans la constellation (notes ordonnées)
 const CONSTELLATION_HASH = '#/@constellation';
 let showLabels = true;
 let selectedObject = null;
@@ -59,6 +62,11 @@ const search = new SearchPalette(
   entry => (entry.node.type === 'MARKDOWN_FILE' ? goToNote(entry.node) : revealNode(entry)),
 );
 const labels = new LabelLayer(document.getElementById('label-layer'));
+const minimap = new MiniMap(document.getElementById('minimap'), node => {
+  stopTour();
+  if (node) revealNode({ node, ancestors: ancestorsOf(node) }, { panel: false });
+  else resetToRoot();
+});
 
 // Taille minimale à l'écran (rayon en px) d'une lune : une note ne doit jamais disparaître.
 const MOON_MIN_PX = 3.5;
@@ -98,10 +106,12 @@ function clearScene() {
     disposeTree(o);
   };
   if (constellation) {
+    stopHistory(false);
     constellation.dispose();
     constellation = null;
     constSelected = null;
     constHovered = null;
+    currentPath = null;
     document.body.classList.remove('is-constellation');
     document.getElementById('constellation-bar').hidden = true;
   }
@@ -312,15 +322,17 @@ function viewBounds() {
   return { cx, cz, radius: radius || 60 };
 }
 
-const CAM_ELEV = 0.34;   // hauteur relative de la caméra — vue en plongée
+// Hauteur relative de la caméra (vue en plongée). En portrait, on plonge davantage :
+// le plan des orbites s'étale alors en hauteur au lieu d'une fine bande.
+const camElev = () => (renderer && renderer.w < renderer.h ? 0.62 : 0.34);
 const FRAME_FILL = 0.88; // fraction du cadre occupée (laisse la marge des labels)
 
 /** Position de caméra à la distance `d` du centre visé, inclinaison constante. */
 function camPosAt(cx, cz, d) {
   return new THREE.Vector3(
     cx,
-    d * CAM_ELEV,
-    cz + d * Math.sqrt(1 - CAM_ELEV * CAM_ELEV),
+    d * camElev(),
+    cz + d * Math.sqrt(1 - camElev() * camElev()),
   );
 }
 
@@ -390,6 +402,7 @@ function enterNode(node) {
   navigationStack.push({ node: currentNode, camera: savedCamera, level: currentLevel });
 
   // Plongée : la caméra fonce dans l'astre, puis le système apparaît depuis son soleil.
+  leavingCamera = cameraSnapshot();
   const obj = currentObjects.find(o => o.userData.node === node);
   const open = () => {
     buildDirectoryView(node);
@@ -407,22 +420,14 @@ function enterNode(node) {
   renderer.flyTo(wp.clone().addScaledVector(toCam, close), wp, 480, open);
 }
 
+/**
+ * Retour : le même historique que le bouton précédent du navigateur (chaque
+ * étape mémorise sa caméra). Arrivé au début de la session, on remonte d'un
+ * niveau dans l'arborescence à la place.
+ */
 function goBack() {
-  if (navigationStack.length === 0) return;
-  const prev = navigationStack.pop();
-
-  if (prev.level === 'root' || !prev.node) {
-    buildRootView(universe);
-  } else {
-    buildDirectoryView(prev.node);
-  }
-
-  if (prev.camera) {
-    renderer.flyTo(prev.camera.pos, prev.camera.target, 900);
-  } else {
-    // Entrée synthétique (venue de la recherche) : pas de caméra à restaurer.
-    frameCurrentView(900);
-  }
+  if (histIndex() > 0) history.back();
+  else if (navigationStack.length > 0) goBackTo(navigationStack.length - 1);
 }
 
 /** Remonte d'un coup à l'entrée `i` de la pile : une seule reconstruction, un seul vol. */
@@ -443,7 +448,7 @@ function resetToRoot() {
 }
 
 function updateBackButtonState() {
-  if (btnBack) btnBack.disabled = navigationStack.length === 0;
+  if (btnBack) btnBack.disabled = histIndex() === 0 && navigationStack.length === 0;
   if (btnReset) btnReset.disabled = navigationStack.length === 0;
 }
 
@@ -465,11 +470,23 @@ function showInfoPanel(node) {
     isCurrent: node === currentNode,
     onEnter: () => enterNode(node),
     onEntry: n => (node.type === 'MARKDOWN_FILE' ? goToNote(n) : openChild(n)),
+    onPath: () => search.openPicker(`Chemin depuis « ${node.name} » vers…`, entry => {
+      if (entry.node.type === 'MARKDOWN_FILE') showPath(node, entry.node);
+    }),
+    onTag: showTag,
   });
+  openPanel();
+}
+
+function openPanel() {
   infoPanel.classList.remove('panel-hidden');
   infoPanel.classList.add('panel-visible');
-  // Recentre la scène dans l'espace laissé libre à gauche du panneau.
-  if (renderer) renderer.setViewShift(window.innerWidth > 768 ? 176 : 0);
+  // Recentre la scène dans l'espace laissé libre : à gauche du panneau sur
+  // grand écran, au-dessus du tiroir (52 % de la hauteur) sur mobile.
+  if (renderer) {
+    if (window.innerWidth > 768) renderer.setViewShift(176, 0);
+    else renderer.setViewShift(0, Math.round(window.innerHeight * 0.24));
+  }
 }
 
 function hideInfoPanel() {
@@ -514,6 +531,9 @@ function updateBreadcrumb() {
 
   if (constellation) addItem('Constellation', null, null);
   else if (currentNode) addItem(currentNode.name, currentNode.visualType, null);
+  // Le dossier courant (en fin de fil) doit rester visible, même sur petit écran.
+  breadcrumb.scrollLeft = breadcrumb.scrollWidth;
+  minimap.setCurrent(constellation ? null : currentNode);
 }
 
 // ─── Raycasting / Interaction ─────────────────────────────────────────────────
@@ -600,6 +620,7 @@ function onClick(event) {
     const isDouble = note && now - lastClickTime < 350;
     lastClickTime = now;
     if (isDouble) goToNote(note);   // double-clic : on rejoint la note dans son système
+    else if (event.shiftKey && note && constSelected) showPath(constSelected.userData.node, note);
     else selectStar(note);
     return;
   }
@@ -684,10 +705,11 @@ function enterConstellation() {
   );
   document.body.classList.add('is-constellation');
   document.getElementById('constellation-bar').hidden = false;
+  setupConstellationBar();
   setConstellationFilter('all');
   breadcrumb.innerHTML = '';
   updateBreadcrumb();
-  if (!restoringUrl && location.hash !== CONSTELLATION_HASH) history.pushState(null, '', CONSTELLATION_HASH);
+  setHash(CONSTELLATION_HASH);
 }
 
 function exitConstellation() {
@@ -702,16 +724,98 @@ function toggleConstellation() {
   else enterConstellation();
 }
 
-function setConstellationFilter(kind) {
+function setConstellationFilter(kind, tag = null) {
   if (!constellation) return;
-  constellation.setFilter(kind);
+  stopHistory();
+  constellation.setFilter(kind, tag);
   document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
     b.classList.toggle('is-active', b.dataset.filter === kind);
   });
+  const select = document.getElementById('constellation-tag');
+  select.value = kind === 'tag' ? (tag || '').toLowerCase() : '';
+  select.classList.toggle('is-active', kind === 'tag');
   document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
 }
 
+/** Contrôles qui dépendent des champs du back récent (dates, tags) : masqués sinon. */
+function setupConstellationBar() {
+  const idx = universe._index;
+  const has = { dates: idx.hasDates, tags: idx.tags.length > 0, timeline: !!idx.timeline };
+  document.querySelectorAll('#constellation-bar [data-needs]').forEach(el => {
+    el.hidden = !has[el.dataset.needs];
+  });
+  const select = document.getElementById('constellation-tag');
+  select.length = 1;
+  for (const { tag, count } of idx.tags) select.add(new Option(`#${tag} (${count})`, tag.toLowerCase()));
+}
+
+/** Tag cliqué dans un panneau : on montre ses notes dans la constellation. */
+function showTag(tag) {
+  if (!constellation) enterConstellation();
+  selectStar(null);
+  setConstellationFilter('tag', tag);
+}
+
+// « Histoire » : les étoiles apparaissent dans l'ordre de création des notes.
+let historyAnim = null;
+const DATE_FMT = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+
+function playHistory() {
+  const span = universe._index.timeline;
+  if (!constellation || !span) return;
+  if (historyAnim) {
+    stopHistory();
+    return;
+  }
+  constellation.setFilter('all');
+  const btn = document.getElementById('btn-history');
+  btn.classList.add('is-active');
+  btn.textContent = '■ Histoire';
+  const t0 = performance.now();
+  const DURATION = 14000;
+  const step = now => {
+    if (!historyAnim || !constellation) return;
+    const p = Math.min(1, (now - t0) / DURATION);
+    const at = span.from + (span.to - span.from) * p;
+    constellation.setCutoff(at);
+    document.getElementById('constellation-count').textContent = `${DATE_FMT.format(at)} · ${constellation.count()} notes`;
+    if (p < 1) historyAnim = requestAnimationFrame(step);
+    else stopHistory(false);
+  };
+  historyAnim = requestAnimationFrame(step);
+}
+
+function stopHistory(reset = true) {
+  if (historyAnim) cancelAnimationFrame(historyAnim);
+  historyAnim = null;
+  const btn = document.getElementById('btn-history');
+  btn.classList.remove('is-active');
+  btn.textContent = '▶ Histoire';
+  if (constellation && reset) {
+    constellation.setCutoff(null);
+    document.getElementById('constellation-count').textContent = `${constellation.count()} notes`;
+  }
+}
+
+/** Chemin le plus court entre deux notes, affiché dans la constellation. */
+function showPath(from, to) {
+  if (!constellation) enterConstellation();
+  currentPath = shortestPath(from, to);
+  constSelected = null;
+  constellation.setFocus(null);
+  constellation.setPath(currentPath);
+  renderPathPanel(currentPath, from, to, n => selectStar(n));
+  openPanel();
+  const { center, radius } = constellation.boundsOf(currentPath.length ? currentPath : [from, to]);
+  const dir = renderer.camera.position.clone().sub(center).normalize();
+  renderer.flyTo(center.clone().addScaledVector(dir, radius * 2.6 + 60), center, 1000);
+}
+
 function selectStar(note) {
+  if (currentPath && !currentPath.includes(note)) {
+    currentPath = null;
+    constellation.setPath(null);
+  }
   constSelected = note ? constellation.proxyOf(note) : null;
   constellation.setFocus(note);
   if (!note) {
@@ -727,15 +831,43 @@ function selectStar(note) {
 
 // ─── URL ──────────────────────────────────────────────────────────────────────
 
-function syncUrl(node, replace = false) {
-  if (!universe || !universe._index || holdUrl) return;
-  const h = hashFor(node, universe._index.vaultDir);
-  if (location.hash === h) return;
-  if (replace || restoringUrl) history.replaceState(null, '', h);
-  else history.pushState(null, '', h);
+// Historique : chaque entrée porte son rang (i) et la caméra au moment où on l'a quittée.
+// Caméra à mémoriser pour l'étape qu'on quitte, capturée avant une plongée
+// (sinon on enregistrerait la caméra déjà rentrée dans l'astre).
+let leavingCamera = null;
+
+function cameraSnapshot() {
+  return { pos: renderer.camera.position.toArray(), target: renderer.controls.target.toArray() };
 }
 
-function navigateFromUrl() {
+function histIndex() {
+  return (history.state && history.state.i) || 0;
+}
+
+function setHash(h, replace = false) {
+  if (location.hash === h) return;
+  if (replace || restoringUrl) {
+    history.replaceState({ ...(history.state || {}), i: histIndex() }, '', h);
+  } else {
+    if (renderer) {
+      history.replaceState({
+        ...(history.state || {}),
+        i: histIndex(),
+        cam: leavingCamera || cameraSnapshot(),
+      }, '', location.hash || '#/');
+    }
+    leavingCamera = null;
+    history.pushState({ i: histIndex() + 1 }, '', h);
+  }
+  updateBackButtonState();
+}
+
+function syncUrl(node, replace = false) {
+  if (!universe || !universe._index || holdUrl) return;
+  setHash(hashFor(node, universe._index.vaultDir), replace);
+}
+
+function navigateFromUrl(cam = null) {
   const node = nodeForHash(location.hash, universe && universe._index);
   restoringUrl = true;
   try {
@@ -750,14 +882,21 @@ function navigateFromUrl() {
     } else {
       revealNode({ node, ancestors: ancestorsOf(node) }, { panel: false });
     }
+    // Retour dans l'historique : on retrouve la caméra telle qu'on l'avait laissée.
+    if (cam) {
+      renderer.flyTo(new THREE.Vector3(...cam.pos), new THREE.Vector3(...cam.target), 900);
+    }
   } finally {
     restoringUrl = false;
+    updateBackButtonState();
   }
 }
 
 /** Fermeture du panneau par l'utilisateur : l'URL revient au dossier affiché. */
 function closePanel() {
   if (constellation) {
+    currentPath = null;
+    constellation.setPath(null);
     selectStar(null);
     return;
   }
@@ -767,10 +906,30 @@ function closePanel() {
 
 // ─── Animations ───────────────────────────────────────────────────────────────
 
-const clock = { start: performance.now() };
+// Horloge de simulation : les orbites peuvent ralentir (survol), s'arrêter
+// (Espace) ou tourner au ralenti si le système demande moins d'animations.
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let simT = 0;
+let simRate = 1;
+let lastFrame = null;
+let orbitsPaused = false;
+
+function advanceSim(time) {
+  const dt = lastFrame === null ? 0 : Math.min(0.1, (time - lastFrame) / 1000);
+  lastFrame = time;
+  const target = orbitsPaused ? 0 : (hoveredObject ? 0.15 : 1) * (reducedMotion ? 0.3 : 1);
+  simRate += (target - simRate) * Math.min(1, dt * 6);
+  simT += dt * simRate;
+  return simT;
+}
+
+function toggleOrbits() {
+  orbitsPaused = !orbitsPaused;
+  document.getElementById('pause-pill').hidden = !orbitsPaused;
+}
 
 function animateObjects(time) {
-  const t = (time - clock.start) * 0.001;
+  const t = advanceSim(time);
 
   currentObjects.forEach((obj, i) => {
     const vt = obj.userData?.node?.visualType;
@@ -799,7 +958,7 @@ function animateObjects(time) {
       case VisualType.GALAXY:
         // Le disque tourne autour de son propre axe (incliné) : les bras sont des
         // ondes de densité, ils ne « coulent » pas vers l'extérieur.
-        if (obj.userData.spin) obj.userData.spin.rotation.y = t * (isClickable ? 0.03 : 0.01);
+        (obj.userData.spins || []).forEach((sp, k) => { sp.rotation.y = t * (isClickable ? 0.03 : 0.01) * (1 + (k % 3) * 0.3); });
         break;
       case VisualType.STAR:
         obj.rotation.y = isClickable ? (t * 0.04 + i * 0.7) : (t * 0.005);
@@ -914,6 +1073,89 @@ function recenter() {
   frameCurrentView(700);
 }
 
+// ─── Visite guidée ────────────────────────────────────────────────────────────
+
+let tour = null;
+
+function startTour() {
+  if (!universe) return;
+  stopTour();
+  const hubs = universe._index.notes.slice().sort((a, b) => b._in.length - a._in.length).slice(0, 5);
+  const steps = [
+    { label: 'Vue d’ensemble du vault', run: resetToRoot, ms: 5000 },
+    ...hubs.map(n => ({ label: `Note très citée : ${n.name}`, run: () => goToNote(n), ms: 6500 })),
+  ];
+  if (hubs.length > 1) {
+    steps.push({ label: 'Comment elles se relient', run: () => showPath(hubs[0], hubs[hubs.length - 1]), ms: 7000 });
+  }
+  steps.push({ label: 'Tout le vault en constellation', run: () => { closePanel(); enterConstellation(); }, ms: 7000 });
+  tour = { steps, i: -1, timer: 0 };
+  nextTourStep();
+}
+
+function nextTourStep() {
+  if (!tour) return;
+  tour.i++;
+  if (tour.i >= tour.steps.length) {
+    stopTour();
+    return;
+  }
+  const step = tour.steps[tour.i];
+  // Les étapes ne remplissent pas l'historique : on remplace l'entrée courante.
+  restoringUrl = true;
+  try {
+    step.run();
+  } finally {
+    restoringUrl = false;
+  }
+  const pill = document.getElementById('tour-pill');
+  pill.hidden = false;
+  pill.querySelector('.tour-step').textContent = `${tour.i + 1}/${tour.steps.length} · ${step.label}`;
+  tour.timer = setTimeout(nextTourStep, step.ms);
+}
+
+function stopTour() {
+  if (!tour) return;
+  clearTimeout(tour.timer);
+  tour = null;
+  document.getElementById('tour-pill').hidden = true;
+}
+
+function isHelpOpen() {
+  return !document.getElementById('help-overlay').classList.contains('hidden');
+}
+
+function toggleHelp() {
+  document.getElementById('help-overlay').classList.toggle('hidden');
+}
+
+// Repli pour les navigateurs qui refusent l'API presse-papiers (contexte non sécurisé…).
+function copyWithSelection(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  return ok;
+}
+
+async function copyLink() {
+  const btn = document.getElementById('btn-copy-link');
+  let ok;
+  try {
+    await navigator.clipboard.writeText(location.href);
+    ok = true;
+  } catch {
+    ok = copyWithSelection(location.href);
+  }
+  btn.dataset.state = ok ? 'done' : 'error';
+  setTimeout(() => { delete btn.dataset.state; }, 1600);
+}
+
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.();
@@ -926,6 +1168,7 @@ function focusSet() {
   const set = new Set();
   if (constellation) {
     if (constHovered) set.add(constHovered);
+    for (const n of currentPath || []) set.add(constellation.proxyOf(n));
     if (constSelected) {
       set.add(constSelected);
       for (const o of constellation.neighborsOf(constSelected.userData.node)) set.add(o);
@@ -975,12 +1218,13 @@ function loop(time) {
 function startWith(data) {
   universe = data;
   search.setUniverse(universe);
+  minimap.setUniverse(universe);
   const initial = location.hash;
   restoringUrl = true;
   buildRootView(universe);
   restoringUrl = false;
   if (initial && initial !== '#/') {
-    history.replaceState(null, '', initial);
+    history.replaceState({ i: 0 }, '', initial);
     navigateFromUrl();
   } else {
     frameCurrentView(1600);   // se joue pendant le fondu de l'écran de chargement
@@ -1024,7 +1268,7 @@ async function init() {
   }
   renderer = new GalaxyRenderer(canvas);
   links = new LinkGraph(renderer.scene, document.getElementById('portal-layer'), onPortal);
-  window.addEventListener('popstate', () => { if (universe) navigateFromUrl(); });
+  window.addEventListener('popstate', e => { if (universe) navigateFromUrl(e.state && e.state.cam); });
   setLoadingProgress(30, "Connexion à l'API obsidian-back…");
 
   await loadUniverse('real');
@@ -1044,6 +1288,34 @@ async function init() {
   // ── Header ──
   btnSearch?.addEventListener('click', () => search.open());
   btnFullscreen?.addEventListener('click', toggleFullscreen);
+  document.getElementById('btn-help')?.addEventListener('click', toggleHelp);
+  document.getElementById('help-overlay')?.addEventListener('click', e => {
+    if (e.target.id === 'help-overlay' || e.target.closest('.help-close')) toggleHelp();
+  });
+  document.getElementById('btn-copy-link')?.addEventListener('click', copyLink);
+  // Légende : dépliée d'office seulement s'il y a la place.
+  const legend = document.getElementById('legend');
+  const btnLegend = document.getElementById('btn-legend');
+  const setLegend = open => {
+    legend.classList.toggle('is-open', open);
+    btnLegend.setAttribute('aria-expanded', String(open));
+  };
+  setLegend(window.innerHeight > 900);
+  btnLegend.addEventListener('click', () => setLegend(!legend.classList.contains('is-open')));
+  document.getElementById('btn-tool-tour')?.addEventListener('click', e => {
+    e.stopPropagation();
+    if (tour) stopTour();
+    else startTour();
+  });
+  // Toute interaction de l'utilisateur interrompt la visite guidée.
+  const interrupt = e => {
+    if (tour && !e.target.closest?.('#btn-tool-tour')) stopTour();
+  };
+  window.addEventListener('pointerdown', interrupt, true);
+  window.addEventListener('wheel', interrupt, { capture: true, passive: true });
+  window.addEventListener('keydown', e => {
+    if (tour && e.key !== 'v' && e.key !== 'V') stopTour();
+  }, true);
 
   // ── Toolbar ──
   document.getElementById('btn-tool-zoom-in')?.addEventListener('click', () => zoomBy(0.25));
@@ -1054,11 +1326,20 @@ async function init() {
   document.querySelectorAll('#constellation-bar [data-filter]').forEach(b => {
     b.addEventListener('click', () => setConstellationFilter(b.dataset.filter));
   });
+  document.getElementById('constellation-tag')?.addEventListener('change', e => {
+    if (e.target.value) setConstellationFilter('tag', e.target.value);
+    else setConstellationFilter('all');
+  });
+  document.getElementById('btn-history')?.addEventListener('click', playHistory);
   document.getElementById('btn-exit-constellation')?.addEventListener('click', exitConstellation);
 
   // ── Recherche ──
   // ── Raccourcis clavier ──
   window.addEventListener('keydown', (e) => {
+    if (isHelpOpen()) {
+      if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); toggleHelp(); }
+      return;
+    }
     if (search.isOpen) {
       if (e.key === 'Escape') { e.preventDefault(); search.close(); }
       return;   // la palette gère ses propres flèches / Entrée
@@ -1072,6 +1353,9 @@ async function init() {
     switch (e.key) {
       case 'Escape':    closePanel(); break;
       case 'g': case 'G': toggleConstellation(); break;
+      case '?': toggleHelp(); break;
+      case 'v': case 'V': if (tour) stopTour(); else startTour(); break;
+      case ' ': e.preventDefault(); toggleOrbits(); break;
       case 'ArrowRight': e.preventDefault(); cycleSelection(1); break;
       case 'ArrowLeft':  e.preventDefault(); cycleSelection(-1); break;
       case 'Enter':
@@ -1091,8 +1375,8 @@ async function init() {
   requestAnimationFrame(loop);
 }
 
-// Accès de debug (console) à l'état de la scène.
-window.__obsidianGalaxy = {
+// Accès de debug (console) à l'état de la scène — en développement seulement.
+if (import.meta.env.DEV) window.__obsidianGalaxy = {
   get renderer() { return renderer; },
   get objects() { return currentObjects; },
   get node() { return currentNode; },

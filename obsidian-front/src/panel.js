@@ -7,6 +7,18 @@ import { esc, dot } from './dom.js';
 const MAX_CHILDREN_SHOWN = 14;
 const RARITY_LABEL = { commune: 'Commune', rare: 'Rare', legendaire: 'Légendaire' };
 const $ = id => document.getElementById(id);
+const NUM = new Intl.NumberFormat('fr-FR');
+const REL = new Intl.RelativeTimeFormat('fr', { numeric: 'auto' });
+
+/** « hier », « il y a 3 semaines », « il y a 2 mois »… */
+export function relativeTime(ms, now = Date.now()) {
+  const days = Math.round((ms - now) / 86400000);
+  const abs = Math.abs(days);
+  if (abs < 7) return REL.format(days, 'day');
+  if (abs < 45) return REL.format(Math.round(days / 7), 'week');
+  if (abs < 365) return REL.format(Math.round(days / 30), 'month');
+  return REL.format(Math.round(days / 365), 'year');
+}
 
 function statRows(rows) {
   return rows.map(([lbl, val]) => `
@@ -38,6 +50,8 @@ function noteContent(node) {
   const rows = [
     ['Rareté', RARITY_LABEL[node.rarity] || '—'],
     ['Taille', `${Math.max(1, Math.round((node.size || 0) / 1024))} ko`],
+    ...(node.words ? [['Longueur', `${NUM.format(node.words)} mots · ${Math.max(1, Math.round(node.words / 230))} min de lecture`]] : []),
+    ...(node.modified ? [['Modifiée', relativeTime(node.modified)]] : []),
     ['Liens sortants', out.length],
     ['Liens entrants', inc.length],
   ];
@@ -59,6 +73,8 @@ function folderContent(node) {
   if (folders > 0) rows.push(['Sous-dossiers', folders]);
   if (children.length > 0) rows.push(['Objets en orbite', children.length]);
   rows.push(['Profondeur', `Niveau ${node.depth ?? 0}`]);
+  if (node.modified) rows.push(['Dernière activité', relativeTime(node.modified)]);
+  if (node.words) rows.push(['Mots', NUM.format(node.words)]);
   return { rows, entries: children.map((c, i) => ({ node: c, prefix: `${i + 1}` })), title: 'Contenu' };
 }
 
@@ -68,7 +84,7 @@ function folderContent(node) {
  * @param onEnter     entrer dans le dossier
  * @param onEntry     clic sur une ligne (enfant d'un dossier, ou note liée)
  */
-export function renderPanel(node, { isCurrent, onEnter, onEntry }) {
+export function renderPanel(node, { isCurrent, onEnter, onEntry, onPath, onTag }) {
   const vt = node.visualType;
   const isNote = node.type === 'MARKDOWN_FILE';
   const badge = $('info-badge');
@@ -78,6 +94,24 @@ export function renderPanel(node, { isCurrent, onEnter, onEntry }) {
   badge.className = vt;
   $('info-name').textContent = node.name;
   $('info-path').textContent = node.path || '';
+
+  // Extrait et tags (fournis par le back récent ; absents sinon).
+  const excerpt = $('info-excerpt');
+  excerpt.hidden = !(isNote && node.excerpt);
+  excerpt.textContent = isNote && node.excerpt ? node.excerpt : '';
+  const tagBox = $('info-tags');
+  tagBox.innerHTML = '';
+  const tags = isNote ? node.tags || [] : [];
+  tagBox.hidden = tags.length === 0;
+  for (const t of tags) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'tag-chip';
+    chip.textContent = `#${t}`;
+    chip.title = `Voir les notes #${t} dans la constellation`;
+    if (onTag) chip.addEventListener('click', () => onTag(t));
+    tagBox.appendChild(chip);
+  }
 
   const { rows, entries, title } = isNote ? noteContent(node) : folderContent(node);
   $('info-stats').innerHTML = statRows(rows);
@@ -108,9 +142,37 @@ export function renderPanel(node, { isCurrent, onEnter, onEntry }) {
   btnEnter.style.display = canEnter ? 'flex' : 'none';
   btnEnter.onclick = canEnter ? onEnter : null;
 
+  const btnPath = $('btn-path');
+  btnPath.style.display = isNote && onPath ? 'flex' : 'none';
+  btnPath.onclick = isNote && onPath ? onPath : null;
+
   const btnObsidian = $('btn-open-obsidian');
   btnObsidian.style.display = isNote ? 'flex' : 'none';
   btnObsidian.onclick = isNote && node.path
     ? () => { window.location.href = `obsidian://open?path=${encodeURIComponent(node.path)}`; }
     : null;
+}
+
+/** Panneau d'un chemin entre deux notes : chaque étape est cliquable. */
+export function renderPathPanel(path, from, to, onStep) {
+  const badge = $('info-badge');
+  badge.textContent = 'Chemin';
+  badge.className = 'path';
+  $('info-name').textContent = `${from.name} → ${to.name}`;
+  $('info-path').textContent = path.length
+    ? `${path.length - 1} lien${path.length > 2 ? 's' : ''} à suivre`
+    : 'Aucune chaîne de liens ne relie ces deux notes.';
+  $('info-stats').innerHTML = statRows([
+    ['Départ', from.name],
+    ['Arrivée', to.name],
+    ['Étapes', path.length ? path.length - 2 : '—'],
+  ]);
+  $('info-children-title').textContent = 'Étapes';
+  $('info-excerpt').hidden = true;
+  $('info-tags').hidden = true;
+  const list = $('info-children');
+  list.innerHTML = '';
+  path.forEach((n, i) => list.appendChild(panelItem(n.name, n.visualType, `${i + 1}`, () => onStep(n))));
+  $('info-children-section').style.display = path.length ? '' : 'none';
+  for (const id of ['btn-enter', 'btn-open-obsidian', 'btn-path']) $(id).style.display = 'none';
 }

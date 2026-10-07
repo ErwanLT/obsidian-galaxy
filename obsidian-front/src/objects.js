@@ -155,48 +155,54 @@ function addGlow(group, color, radius, opacity) {
  * Un disque de particules se lit en profondeur et laisse voir ce qui
  * est derrière.
  */
-export function createGalaxy(scene, node, position, index, opts = {}) {
-  const sizeMul = opts.sizeMul ?? 1;
-  const type = opts.type ?? 'galaxy';
-
+export function createGalaxy(scene, node, position, index) {
   const group = new THREE.Group();
   group.position.copy(position);
-  group.userData = { node, type, index };
+  group.userData = { node, type: 'galaxy', index };
+  const radius = galaxyRadius(node);
+  group.userData.visualRadius = radius;
+  addHitSphere(group, radius * 0.8);
 
   const rnd = seededRandom(nodeSeed(node, 'galaxy:'));
-  const radius = galaxyRadius(node) * sizeMul;   // rayon du disque
-  const bulge = radius * 0.2;
-  group.userData.visualRadius = radius;
+  const { tilt, spin } = galaxyBody(rnd, radius, Math.min(2200 + node.markdownCount * 40, 6000));
+  group.add(tilt);
+  group.userData.spins = [spin];
+  addGlow(group, 0xB8C8FF, radius * 1.05, 0.12);   // halo diffus du disque
 
-  // Cible de clic : sphère transparente couvrant le disque. Sans elle il
-  // faudrait viser le bulbe central au pixel près.
+  scene.add(group);
+  return group;
+}
+
+/** Sphère de clic invisible : sans elle il faudrait viser un disque de particules au pixel près. */
+function addHitSphere(group, r) {
   const hit = new THREE.Mesh(
-    new THREE.SphereGeometry(radius * 0.8, 12, 12),
+    new THREE.SphereGeometry(r, 12, 12),
     new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
   );
   hit.userData = { isCore: true };
   group.add(hit);
+}
 
-  // Inclinaison propre à chaque galaxie (on ne les voit pas toutes de face) ;
-  // la rotation du disque se fait autour de son propre axe, dans `spin`.
+/**
+ * Corps d'une galaxie spirale, sans placement : spirale logarithmique de 2 à 4
+ * bras, bulbe de vieilles étoiles jaunes, bras bleutés, régions HII roses,
+ * bandes de poussière. Renvoie le groupe incliné et le disque à faire tourner.
+ */
+function galaxyBody(rnd, radius, N, glowK = 1) {
+  const bulge = radius * 0.2;
+  // Inclinaison propre (on ne les voit pas toutes de face) ; le disque tourne
+  // autour de son propre axe, dans `spin`.
   const tilt = new THREE.Group();
-  tilt.rotation.set((rnd() - 0.5) * 0.9, 0, (rnd() - 0.5) * 0.9);
+  tilt.rotation.set((rnd() - 0.5) * 0.9, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.9);
   const spin = new THREE.Group();
   tilt.add(spin);
-  group.add(tilt);
-  group.userData.spin = spin;
 
-  // Bulbe : vieilles étoiles, jaune orangé.
-  addGlow(spin, 0xFFE2B0, bulge * 2.6, 0.9);
-  addGlow(spin, 0xFFF4E0, bulge * 1.1, 0.9);
-  addGlow(group, 0xB8C8FF, radius * 1.05, 0.12);   // halo diffus du disque
+  addGlow(spin, 0xFFE2B0, bulge * 2.6, 0.9 * glowK);
+  addGlow(spin, 0xFFF4E0, bulge * 1.1, 0.9 * glowK);
 
-  // Spirale logarithmique : r = a·e^(b·θ). 2 à 4 bras selon le dossier.
   const ARMS = 2 + Math.floor(rnd() * 3);
   const pitch = 0.22 + rnd() * 0.12;                // tan de l'angle d'ouverture
   const armAngle = r => Math.log(Math.max(r, bulge * 0.5) / (bulge * 0.5)) / pitch;
-
-  const N = Math.min(2200 + node.markdownCount * 40, 6000);
   const stars = { pos: [], col: [] };
   const knots = { pos: [], col: [] };
   const dust = { pos: [] };
@@ -204,6 +210,7 @@ export function createGalaxy(scene, node, position, index, opts = {}) {
   const cDisc = new THREE.Color(0xF2E6D8);
   const cYoung = new THREE.Color(0xA9C4FF);
   const cHII = new THREE.Color(0xFF6FA8);
+  const c = new THREE.Color();
   const gauss = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;
 
   for (let i = 0; i < N; i++) {
@@ -215,17 +222,15 @@ export function createGalaxy(scene, node, position, index, opts = {}) {
     theta += inArm ? gauss() * (0.18 + 0.25 * (r / radius)) : rnd() * Math.PI * 2;
     const x = Math.cos(theta) * r;
     const z = Math.sin(theta) * r;
-    const thick = radius * (r < bulge ? 0.12 : 0.025);
-    const y = gauss() * thick;
-
+    const y = gauss() * radius * (r < bulge ? 0.12 : 0.025);
     const k = r / radius;
-    const c = r < bulge * 1.4
-      ? cBulge.clone().lerp(cDisc, r / (bulge * 1.4))
-      : inArm ? cDisc.clone().lerp(cYoung, Math.min(1, k * 1.4)) : cDisc.clone().multiplyScalar(0.55);
+    // Couleur calculée dans un objet réutilisé (pas d'allocation par particule).
+    if (r < bulge * 1.4) c.copy(cBulge).lerp(cDisc, r / (bulge * 1.4));
+    else if (inArm) c.copy(cDisc).lerp(cYoung, Math.min(1, k * 1.4));
+    else c.copy(cDisc).multiplyScalar(0.55);
     const b = 0.55 + 0.45 * rnd();
     stars.pos.push(x, y, z);
     stars.col.push(c.r * b, c.g * b, c.b * b);
-
     // Régions HII (formation d'étoiles) : points roses sur les bras, à mi-disque.
     if (inArm && k > 0.3 && k < 0.9 && rnd() < 0.035) {
       knots.pos.push(x, y, z);
@@ -238,38 +243,84 @@ export function createGalaxy(scene, node, position, index, opts = {}) {
     }
   }
 
+  const sizeK = Math.max(0.45, Math.min(1, radius / 30));   // particules plus fines sur les petites galaxies
   const points = (data, size, opacity, blending, colors = true) => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(data.pos, 3));
     if (colors) geo.setAttribute('color', new THREE.Float32BufferAttribute(data.col, 3));
+    // Texture ronde et douce : sans elle, chaque étoile est un carré vu de près.
     return new THREE.Points(geo, new THREE.PointsMaterial({
-      size, sizeAttenuation: true, vertexColors: colors, color: colors ? 0xffffff : 0x0a0604,
-      transparent: true, opacity, depthWrite: false, blending,
+      size: size * sizeK * 1.6, sizeAttenuation: true, vertexColors: colors, color: colors ? 0xffffff : 0x0a0604,
+      map: glowTexture(), transparent: true, opacity, depthWrite: false, blending,
     }));
   };
   spin.add(points(dust, 2.4, 0.22, THREE.NormalBlending, false));
   spin.add(points(stars, 1.1, 0.85, THREE.AdditiveBlending));
   if (knots.pos.length) spin.add(points(knots, 2.2, 0.9, THREE.AdditiveBlending));
+  return { tilt, spin };
+}
+
+/**
+ * Groupe de galaxies (amas ou superamas) : de vraies petites galaxies, chacune
+ * inclinée et tournant sur elle-même, plus un gaz chaud diffus entre elles.
+ * `filaments` : les membres s'alignent le long de quelques brins (toile cosmique).
+ */
+function createGalaxyGroup(scene, node, position, index, { type, radius, count, filaments }) {
+  const group = new THREE.Group();
+  group.position.copy(position);
+  group.userData = { node, type, index, visualRadius: radius };
+  addHitSphere(group, radius * 0.75);
+
+  const rnd = seededRandom(nodeSeed(node, `${type}:`));
+  const gauss = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;
+  const strands = Array.from({ length: filaments }, () => {
+    const a = rnd() * Math.PI * 2;
+    return new THREE.Vector3(Math.cos(a), (rnd() - 0.5) * 0.3, Math.sin(a));
+  });
+  group.userData.spins = [];
+  for (let k = 0; k < count; k++) {
+    let p;
+    if (filaments) {
+      const dir = strands[k % filaments];
+      p = dir.clone().multiplyScalar(radius * (0.1 + rnd() * 0.75))
+        .add(new THREE.Vector3(gauss(), gauss() * 0.4, gauss()).multiplyScalar(radius * 0.1));
+    } else {
+      // Amas : concentration au centre, sphère légèrement aplatie.
+      p = new THREE.Vector3(gauss(), gauss() * 0.5, gauss()).multiplyScalar(radius * 0.45);
+    }
+    // Une galaxie dominante au centre, des compagnes plus petites autour.
+    const r = k === 0 ? radius * 0.3 : radius * (0.1 + rnd() * 0.14);
+    if (k === 0) p.set(0, 0, 0);
+    // Bulbes atténués : à plusieurs, ils saturaient en une seule tache lumineuse.
+    const { tilt, spin } = galaxyBody(rnd, r, Math.round(500 + r * 22), k === 0 ? 0.55 : 0.3);
+    tilt.position.copy(p);
+    group.add(tilt);
+    group.userData.spins.push(spin);
+  }
+  // Gaz intra-amas : lueur très diffuse qui unifie le groupe.
+  addGlow(group, 0xC9D4FF, radius * 1.3, 0.06);
 
   scene.add(group);
   return group;
 }
 
 /**
- * Superamas — la plus vaste structure : grand disque de galaxies.
+ * Superamas — la plus vaste structure : galaxies le long de filaments.
  */
 export function createSupercluster(scene, node, position, index) {
-  return createGalaxy(scene, node, position, index, {
-    sizeMul: 1.8, type: 'supercluster',
+  const n = (node.children || []).length;
+  return createGalaxyGroup(scene, node, position, index, {
+    type: 'supercluster', radius: superclusterRadius(node), count: Math.min(16, 8 + n), filaments: 3,
   });
 }
 
 /**
- * Amas de galaxies — disque intermédiaire entre superamas et galaxie.
+ * Amas de galaxies — groupe compact de galaxies autour d'une dominante.
  */
 export function createCluster(scene, node, position, index) {
-  return createGalaxy(scene, node, position, index, {
-    sizeMul: 1.25, type: 'cluster',
+  const n = (node.children || []).length;
+  return createGalaxyGroup(scene, node, position, index, {
+    type: 'cluster', radius: clusterRadius(node), count: Math.min(9, 4 + Math.ceil(n / 3)), filaments: 0,
   });
 }
 
@@ -724,6 +775,33 @@ export function nodeSeed(node, salt = '') {
 const TEXTURE_SLOTS = ['map', 'emissiveMap', 'alphaMap', 'normalMap', 'bumpMap'];
 
 /**
+ * Cache LRU des textures générées (surfaces, nuages, anneaux) : revisiter un
+ * dossier ne recalcule plus ses textures pixel par pixel. Les textures en cache
+ * sont « partagées » (disposeTree les épargne) ; la plus ancienne est libérée
+ * quand le cache déborde — bien au-delà du nombre de textures d'une vue.
+ */
+const TEX_CACHE = new Map();
+const TEX_CACHE_MAX = 150;
+
+function cachedTexture(key, make) {
+  const hit = TEX_CACHE.get(key);
+  if (hit) {
+    TEX_CACHE.delete(key);
+    TEX_CACHE.set(key, hit);
+    return hit;
+  }
+  const tex = make();
+  tex.userData.shared = true;
+  TEX_CACHE.set(key, tex);
+  if (TEX_CACHE.size > TEX_CACHE_MAX) {
+    const [oldKey, old] = TEX_CACHE.entries().next().value;
+    TEX_CACHE.delete(oldKey);
+    old.dispose();
+  }
+  return tex;
+}
+
+/**
  * Libère la mémoire GPU d'un objet et de ses descendants (géométries, matériaux,
  * textures générées). Les textures partagées entre astres sont conservées.
  */
@@ -859,6 +937,10 @@ function _planetPixel(lon, lat, x, y, s, archetype) {
 
 /** Texture de surface 256×128 d'une planète, unique par seed. */
 function _makePlanetTexture(seed, archetype) {
+  return cachedTexture(`planet:${seed}:${archetype}`, () => _buildPlanetTexture(seed, archetype));
+}
+
+function _buildPlanetTexture(seed, archetype) {
   const W = 256, H = 128;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -882,6 +964,10 @@ function _makePlanetTexture(seed, archetype) {
 
 /** Couche de nuages : alpha blanc là où le bruit dépasse le seuil. */
 function _makeCloudTexture(seed) {
+  return cachedTexture(`cloud:${seed}`, () => _buildCloudTexture(seed));
+}
+
+function _buildCloudTexture(seed) {
   const W = 256, H = 128;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -1063,6 +1149,10 @@ function _makeDiscTexture() {
 
 /** Bandes d'anneau (façon Saturne) : densité variable, divisions sombres. */
 function _makeRingTexture(seed) {
+  return cachedTexture(`ring:${seed}`, () => _buildRingTexture(seed));
+}
+
+function _buildRingTexture(seed) {
   const W = 256;
   const c = document.createElement('canvas');
   c.width = W;
@@ -1167,6 +1257,10 @@ function _moonPixel(lon, lat, s) {
 
 /** Texture de surface d'une lune (128×64), unique par seed. */
 function _makeMoonTexture(seed) {
+  return cachedTexture(`moon:${seed}`, () => _buildMoonTexture(seed));
+}
+
+function _buildMoonTexture(seed) {
   const W = 128, H = 64;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -1207,7 +1301,8 @@ export function createMoon(scene, node, position, index) {
   const seed = nodeSeed(node);
   // Halo selon la rareté (taille relative de la note dans le vault).
   const color = RARITY_GLOW[node.rarity] ?? pickColor(COLORS.moon, index);
-  const glowBoost = node.rarity === 'legendaire' ? 1.6 : node.rarity === 'rare' ? 1.25 : 1;
+  // Discret : un léger halo coloré signale la rareté sans transformer la lune en néon.
+  const glowBoost = node.rarity === 'legendaire' ? 0.75 : node.rarity === 'rare' ? 0.6 : 0.4;
   group.userData.coreRadius = size;
 
   const tex = _makeMoonTexture(seed);
@@ -1227,7 +1322,7 @@ export function createMoon(scene, node, position, index) {
 
   // Lueur discrète : les lunes sont minuscules, sans elle elles
   // disparaissent contre le fond étoilé.
-  addGlow(group, color, size * 3 * glowBoost, 0.5 * glowBoost);
+  addGlow(group, color, size * (2 + glowBoost), 0.5 * glowBoost);
 
   scene.add(group);
   return group;

@@ -144,3 +144,63 @@ describe('constellation', () => {
     expect(linked / nl).toBeLessThan(all / na);
   });
 });
+
+describe('chemin entre deux notes', async () => {
+  const { shortestPath } = await import('../src/graph.js');
+  const mk = name => ({ name, _out: [], _in: [] });
+  const link = (a, b) => { a._out.push(b); b._in.push(a); };
+  const [a, b, c, d, e, iso] = ['a', 'b', 'c', 'd', 'e', 'iso'].map(mk);
+  link(a, b); link(b, c); link(c, d); link(a, e); link(e, d);   // deux chemins a→d, longueur 3 et 2
+  it('prend le plus court, dans les deux sens de lien', () => {
+    expect(shortestPath(a, d).map(n => n.name)).toEqual(['a', 'e', 'd']);
+    expect(shortestPath(d, a).map(n => n.name)).toEqual(['d', 'e', 'a']);
+    expect(shortestPath(c, e).length).toBe(3);
+  });
+  it('renvoie la note seule vers elle-même, et rien sans chemin', () => {
+    expect(shortestPath(a, a)).toEqual([a]);
+    expect(shortestPath(a, iso)).toEqual([]);
+  });
+});
+
+describe('mini-carte', async () => {
+  const { radialLayout } = await import('../src/minimap.js');
+  it('place chaque dossier, la racine au centre, plus loin à chaque niveau', () => {
+    const v = demoUniverse();
+    const pos = radialLayout(v);
+    const dirs = [];
+    const walk = n => { if (n.type !== 'MARKDOWN_FILE') { dirs.push(n); (n.children || []).forEach(walk); } };
+    walk(v);
+    expect(pos.size).toBe(dirs.length);
+    const dist = n => Math.hypot(pos.get(n).x - 84, pos.get(n).y - 84);
+    expect(dist(v)).toBe(0);
+    for (const n of dirs) if (n._parent && n._parent !== v) expect(dist(n)).toBeGreaterThan(dist(n._parent));
+  });
+});
+
+describe('dates relatives', async () => {
+  const { relativeTime } = await import('../src/panel.js');
+  const now = Date.UTC(2026, 9, 7);
+  const DAY = 86400000;
+  it('choisit une unité lisible', () => {
+    expect(relativeTime(now - DAY, now)).toBe('hier');
+    expect(relativeTime(now - 21 * DAY, now)).toBe('il y a 3 semaines');
+    expect(relativeTime(now - 90 * DAY, now)).toBe('il y a 3 mois');
+    expect(relativeTime(now - 800 * DAY, now)).toBe('il y a 2 ans');
+  });
+});
+
+describe('recherche étendue', () => {
+  const entries = [
+    { node: { name: 'Kafka', tags: ['Messaging'], excerpt: 'Un broker distribué' }, ancestors: [] },
+    { node: { name: 'Résilience', tags: ['back'], excerpt: 'Circuit breaker et Kafka en secours' }, ancestors: [] },
+    { node: { name: 'Divers', excerpt: 'rien' }, ancestors: [] },
+  ];
+  it('#tag cherche parmi les tags, sans accents ni casse', () => {
+    expect(searchEntries(entries, '#mess').map(e => e.node.name)).toEqual(['Kafka']);
+    expect(searchEntries(entries, '#').length).toBe(0);
+  });
+  it('le nom passe avant l’extrait', () => {
+    expect(searchEntries(entries, 'kafka').map(e => e.node.name)).toEqual(['Kafka', 'Résilience']);
+    expect(searchEntries(entries, 'ka').map(e => e.node.name)).toEqual(['Kafka']);   // extrait : 3 lettres minimum
+  });
+});
