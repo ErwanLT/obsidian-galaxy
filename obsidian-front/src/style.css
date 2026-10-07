@@ -763,3 +763,78 @@ body.is-constellation #legend { display: none; }
   color: var(--cyan-l);
   flex-shrink: 0;
 }
+
+/* ── Panneau : actions secondaires ─────────────────────────── */
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.panel-mini {
+  flex: 1;
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+#btn-copy-link[data-state="done"]::after { content: ' ✓'; color: var(--emerald-l); }
+#btn-copy-link[data-state="error"]::after { content: ' — impossible'; color: var(--rose); }
+
+#info-badge.path { color: #ffd27a; border-color: rgba(255, 210, 122, .45); }
+
+.btn-help { font: 600 15px 'Outfit', sans-serif; color: var(--text-mid); }
+
+/* ── Aide ───────────────────────────────────────────────────── */
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 450;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 1, 10, .55);
+  backdrop-filter: blur(4px);
+}
+
+#help-overlay.hidden { display: none; }
+
+.help-box {
+  width: min(460px, calc(100% - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--surface-3);
+  border: 1px solid var(--stroke-3);
+  border-radius: var(--r-xl);
+  box-shadow: var(--elev-4);
+  padding: 18px 20px;
+}
+
+.help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.help-head h2 { font: 600 16px 'Outfit', sans-serif; color: var(--text-hi); }
+
+.help-close {
+  font: inherit;
+  color: var(--text-lo);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.help-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font: 400 13px 'Outfit', sans-serif;
+}
+
+.help-list dt { color: var(--text-hi); white-space: nowrap; }
+.help-list dd { color: var(--text-mid); }
+
+.help-list kbd {
+  font: 400 11px 'Space Mono', monospace;
+  padding: 1px 5px;
+  border: 1px solid var(--stroke-2);
+  border-radius: 5px;
+  background: var(--stroke-1);
+}

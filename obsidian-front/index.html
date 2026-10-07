@@ -123,6 +123,7 @@
         <button class="btn-ghost" id="btn-search" title="Rechercher une note (⌘K)" aria-label="Rechercher">
           <svg class="ico"><use href="#i-search"/></svg>
         </button>
+        <button class="btn-ghost btn-help" id="btn-help" title="Raccourcis clavier (?)" aria-label="Raccourcis clavier">?</button>
         <button class="btn-ghost" id="btn-fullscreen" title="Plein écran (F)" aria-label="Plein écran">
           <svg class="ico"><use href="#i-expand"/></svg>
         </button>
@@ -172,6 +173,11 @@
           <span>Entrer dans ce système</span>
           <svg class="ico"><use href="#i-arrow-right"/></svg>
         </button>
+
+        <div class="panel-actions">
+          <button id="btn-path" class="btn-secondary panel-mini" type="button" style="display:none">Chemin vers…</button>
+          <button id="btn-copy-link" class="btn-secondary panel-mini" type="button">Copier le lien</button>
+        </div>
 
         <button id="btn-open-obsidian" class="btn-open-obsidian" style="display:none">
           <span>Ouvrir dans Obsidian</span>
@@ -227,6 +233,7 @@
       <span><kbd>Double-clic</kbd> Entrer</span>
       <span><kbd>G</kbd> Constellation</span>
       <span><kbd>Espace</kbd> Pause</span>
+      <span><kbd>?</kbd> Aide</span>
     </div>
 
   </div>
@@ -241,6 +248,34 @@
         <kbd class="search-esc">Échap</kbd>
       </div>
       <div id="search-results"></div>
+    </div>
+  </div>
+
+  <!-- ══ Aide : raccourcis ══════════════════════════════════════════════ -->
+  <div id="help-overlay" class="hidden" role="dialog" aria-label="Raccourcis clavier">
+    <div class="help-box">
+      <div class="help-head">
+        <h2>Raccourcis</h2>
+        <button type="button" class="help-close" aria-label="Fermer">✕</button>
+      </div>
+      <dl class="help-list">
+        <dt><kbd>Glisser</kbd> / <kbd>Molette</kbd></dt><dd>Pivoter / zoomer</dd>
+        <dt><kbd>Clic</kbd></dt><dd>Sélectionner un astre</dd>
+        <dt><kbd>Double-clic</kbd> · <kbd>Entrée</kbd></dt><dd>Entrer dans le dossier sélectionné</dd>
+        <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Astre précédent / suivant</dd>
+        <dt><kbd>Retour arrière</kbd></dt><dd>Revenir à la vue précédente</dd>
+        <dt><kbd>R</kbd></dt><dd>Revenir à l'univers</dd>
+        <dt><kbd>/</kbd> · <kbd>⌘K</kbd></dt><dd>Rechercher une note ou un dossier</dd>
+        <dt><kbd>G</kbd></dt><dd>Constellation du vault</dd>
+        <dt><kbd>Maj</kbd> + <kbd>clic</kbd></dt><dd>Constellation : chemin depuis l'étoile sélectionnée</dd>
+        <dt><kbd>Espace</kbd></dt><dd>Mettre les orbites en pause</dd>
+        <dt><kbd>C</kbd></dt><dd>Recentrer la vue</dd>
+        <dt><kbd>L</kbd></dt><dd>Afficher / masquer les noms</dd>
+        <dt><kbd>+</kbd> <kbd>-</kbd></dt><dd>Zoom</dd>
+        <dt><kbd>F</kbd></dt><dd>Plein écran</dd>
+        <dt><kbd>Échap</kbd></dt><dd>Fermer le panneau</dd>
+        <dt><kbd>?</kbd></dt><dd>Cette aide</dd>
+      </dl>
     </div>
   </div>
 

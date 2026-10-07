@@ -144,3 +144,20 @@ describe('constellation', () => {
     expect(linked / nl).toBeLessThan(all / na);
   });
 });
+
+describe('chemin entre deux notes', async () => {
+  const { shortestPath } = await import('../src/graph.js');
+  const mk = name => ({ name, _out: [], _in: [] });
+  const link = (a, b) => { a._out.push(b); b._in.push(a); };
+  const [a, b, c, d, e, iso] = ['a', 'b', 'c', 'd', 'e', 'iso'].map(mk);
+  link(a, b); link(b, c); link(c, d); link(a, e); link(e, d);   // deux chemins a→d, longueur 3 et 2
+  it('prend le plus court, dans les deux sens de lien', () => {
+    expect(shortestPath(a, d).map(n => n.name)).toEqual(['a', 'e', 'd']);
+    expect(shortestPath(d, a).map(n => n.name)).toEqual(['d', 'e', 'a']);
+    expect(shortestPath(c, e).length).toBe(3);
+  });
+  it('renvoie la note seule vers elle-même, et rien sans chemin', () => {
+    expect(shortestPath(a, a)).toEqual([a]);
+    expect(shortestPath(a, iso)).toEqual([]);
+  });
+});
