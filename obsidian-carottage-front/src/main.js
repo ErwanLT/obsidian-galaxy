@@ -1,7 +1,7 @@
 // Carottage — le vault comme une carotte de sédiments.
 
 import { buildCore, fetchUniverse, depthMeters } from './data.js';
-import { layoutTray, layerAt } from './layout.js';
+import { layoutTray, layoutByPeriod, layerAt } from './layout.js';
 import { renderTray, drawVeins, litColor } from './render.js';
 import { renderSheet } from './panel.js';
 import { matcher } from './filter.js';
@@ -12,6 +12,20 @@ const tip = document.getElementById('tip');
 const sheet = document.getElementById('sheet');
 const search = document.getElementById('search');
 const status = document.getElementById('status');
+const cut = document.getElementById('cut');
+
+// Découpage choisi : retenu d'une visite à l'autre (si le navigateur le permet).
+const CUT_KEY = 'carottage.cut';
+try {
+  const saved = localStorage.getItem(CUT_KEY);
+  if (saved && cut.querySelector(`option[value="${saved}"]`)) cut.value = saved;
+} catch { /* stockage indisponible : découpage par défaut */ }
+if (!cut.value) cut.value = 't12';
+cut.addEventListener('change', () => {
+  try { localStorage.setItem(CUT_KEY, cut.value); } catch { /* sans importance */ }
+  layout();
+  if (selected) scrollToLayer(selected);
+});
 
 let core = null;
 let tray = null;
@@ -28,6 +42,7 @@ async function boot() {
   } catch (err) {
     console.error(err);
     showStatus('Impossible de joindre le back (/api/universe). Lance obsidian-back puis recharge la page.');
+    svg.hidden = true;
     document.getElementById('subtitle').textContent = 'Carottier à l’arrêt';
     return;
   }
@@ -92,7 +107,19 @@ function layout() {
   const narrow = window.innerWidth < 640;
   const width = rect.width - 40;
   const height = window.innerHeight - rect.top - document.getElementById('foot').offsetHeight - 110;
-  tray = layoutTray(core, width, height, narrow ? { colW: 46, gap: 28, minMedian: 12 } : {});
+  const mode = cut.value;
+  const amount = Number(mode.slice(1));
+  if (mode[0] === 't') {
+    // Une carotte par période : colonnes plus larges pour l'année, plus serrées pour le mois.
+    const size = amount === 1 ? { colW: 40, gap: 20 } : amount >= 12 ? { colW: 84, gap: 56 } : { colW: 60, gap: 30 };
+    if (narrow) Object.assign(size, { colW: Math.round(size.colW * 0.7), gap: Math.round(size.gap * 0.7) });
+    tray = layoutByPeriod(core, height, amount, size);
+  } else {
+    const size = narrow ? { colW: 46, gap: 28, minMedian: 12 } : {};
+    tray = layoutTray(core, width, height, mode[0] === 'w' ? { ...size, words: amount } : size);
+  }
+  hovered = null;   // les couches ont bougé sous le pointeur
+  tip.hidden = true;
   view = renderTray(svg, core, tray);
   applyFilter();
   highlight();

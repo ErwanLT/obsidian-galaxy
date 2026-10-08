@@ -125,7 +125,7 @@ npm run dev
 
 ## 🪨 Carottage (`obsidian-carottage-front`)
 
-Une coupe géologique du Vault, rangée en tronçons comme dans une caisse de carottier :
+Une coupe géologique du Vault, rangée en tronçons comme dans une caisse de carottier. Le sélecteur **Découpage** choisit comment la carotte est coupée : une carotte **par an, semestre, trimestre ou mois** (à échelle commune, pour comparer les périodes ; une période sans publication laisse un tronçon vide), des tronçons de **longueur fixe** (5, 10, 25 ou 50 m), ou **tout sur un écran**. Le choix est retenu d'une visite à l'autre.
 
 - **Chaque note = une strate**, déposée à sa date de publication (`published_at` du frontmatter) : la surface est la note la plus récente, le fond la plus ancienne. **Épaisseur = nombre de mots** (1 mot = 1 mm).
 - **Couleur et figuré = dossier** (lithologie) ; les dossiers dominants sont découpés en sous-dossiers, les plus rares regroupés en « divers ».

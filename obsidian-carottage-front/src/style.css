@@ -9,6 +9,7 @@
   --ink-2: #6b6255;
   --ink-3: #9a907f;
   --accent: #b3261e;
+  --hiatus: #d4161b;
   --accent-2: #1f5f8b;
   --sheet: #fbf8f1;
   --line: rgba(43, 38, 32, 0.16);
@@ -29,6 +30,7 @@
     --ink-2: #b5aa96;
     --ink-3: #7f7666;
     --accent: #ff7a66;
+    --hiatus: #ff4d3d;
     --accent-2: #7cb7e0;
     --sheet: #26231e;
     --line: rgba(238, 230, 214, 0.14);
@@ -94,7 +96,17 @@ h1 {
 
 #subtitle { margin: 6px 0 0; color: var(--ink-2); }
 
-.tools { display: flex; gap: 8px; align-items: center; }
+.tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.cut { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+#cut {
+  font: inherit;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
 
 #search {
   width: min(340px, 70vw);
@@ -181,8 +193,12 @@ body.has-sheet #tray-wrap { margin-right: 360px; }
 .zone-socle { filter: saturate(0.2) brightness(0.8); }
 
 .shade { pointer-events: none; mix-blend-mode: multiply; }
-.hiatus { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-linejoin: bevel; }
-#tray .hiatus { stroke: #7a1610; }
+.hiatus { fill: none; stroke: var(--hiatus); stroke-width: 2.4; stroke-linejoin: miter; }
+.hiatus-halo { fill: none; stroke: var(--paper); stroke-width: 6; stroke-linejoin: miter; opacity: 0.9; }
+.hiatus-label { font: 600 9.5px var(--mono); fill: var(--hiatus); letter-spacing: 0.02em; }
+.hiatus-fill { fill: url(#hiatus-hatch); stroke: var(--hiatus); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.hiatus-hatch { stroke: var(--hiatus); stroke-width: 1.4; opacity: 0.45; }
+.hiatus-mark { cursor: help; }
 .draft-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
 .fossil { stroke: #3a2c1a; fill: none; }
 .legend-signs .fossil { stroke: var(--ink); }

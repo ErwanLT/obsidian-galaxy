@@ -81,7 +81,7 @@ const fmtMonth = new Intl.DateTimeFormat('fr-FR', { month: 'short', year: 'numer
  */
 export function renderTray(svg, core, tray) {
   svg.replaceChildren();
-  const W = tray.width + 40;
+  const W = tray.width + 64;   // 20 px à gauche, 44 à droite pour la durée des lacunes
   const Hs = tray.H + TOP + BOTTOM;
   svg.setAttribute('viewBox', `-20 ${-TOP} ${W} ${Hs}`);
   svg.setAttribute('width', W);
@@ -101,6 +101,9 @@ export function renderTray(svg, core, tray) {
   for (const a of [0.9, 1.9, 2.9, 3.9, 5]) {
     el('path', { d: `M${a} -0.6 L${a + 0.9} 0.6`, class: 'fossil', 'stroke-width': 0.7 }, amm);
   }
+
+  const hatch = el('pattern', { id: 'hiatus-hatch', width: 8, height: 8, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, defs);
+  el('path', { d: 'M0 0 V8', class: 'hiatus-hatch' }, hatch);
 
   const byLayer = new Map();
   const add = (l, e) => {
@@ -134,19 +137,19 @@ export function renderTray(svg, core, tray) {
         el('use', { href: '#ammonite', x: w / 2 - s / 2, y: (p.y0 + p.y1) / 2 - s / 2, width: s, height: s, class: 'fossil-use' }, body);
       }
     }
-    // Lacunes : surface d'érosion en dents de scie.
-    for (const h of core.hiatuses) {
-      const y = h.at >= 0 ? core.layers[h.index].top - col.from : -1;
-      if (y <= 0 || y >= tray.H || core.layers[h.index].pieces[0]?.col !== col.index) continue;
-      let d = `M0 ${y}`;
-      for (let x = 0; x <= w; x += 5) d += ` L${x} ${y + (x / 5) % 2 * 2.6 - 1.3}`;
-      const hl = el('path', { d, class: 'hiatus' }, body);
-      el('title', {}, hl).textContent = `Lacune : ${Math.round(h.days / 30.4)} mois sans publication`;
-    }
     el('rect', { x: 0, y: 0, width: w, height: bottom, rx: 7, fill: 'url(#cylinder)', class: 'shade' }, g);
 
+    // Lacunes : surface d'érosion en dents de scie, par-dessus l'ombrage et
+    // débordant du tronçon, avec sa durée dans l'intervalle à droite.
+    for (const h of tray.grouped ? [] : core.hiatuses) {
+      const y = core.layers[h.index].top - col.from;
+      if (y <= 0 || y >= tray.H || core.layers[h.index].pieces[0]?.col !== col.index) continue;
+      const months = Math.round(h.days / 30.4);
+      hiatusMark(g, y, w, `${months} mois`, `Lacune : ${months} mois sans publication (${h.days} jours)`);
+    }
+
     // Repères d'années, dans l'intervalle à gauche du tronçon.
-    for (const p of col.pieces) {
+    for (const p of tray.grouped ? [] : col.pieces) {
       const l = p.layer;
       const prev = core.layers[l.index - 1];
       if (p.cutTop || !prev || yearOf(l) == null || yearOf(prev) == null || yearOf(prev) === yearOf(l)) continue;
@@ -154,11 +157,16 @@ export function renderTray(svg, core, tray) {
       el('text', { x: -12, y: p.y0, class: 'year', transform: `rotate(-90 -12 ${p.y0})`, 'text-anchor': 'end' }, g)
         .textContent = String(yearOf(prev));
     }
-    if (col.index === 0 && core.counts.get('meuble')) {
+    if (!tray.grouped && col.index === 0 && core.counts.get('meuble')) {
       const lastDraft = core.layers.filter(l => l.zone === 'meuble').at(-1);
       el('text', { x: -12, y: 0, class: 'year muted', transform: 'rotate(-90 -12 0)', 'text-anchor': 'end' }, g)
         .textContent = 'meuble';
       el('path', { d: `M-9 ${lastDraft.bottom + 5} H${w + 9}`, class: 'draft-line' }, g);
+    }
+
+    if (tray.grouped) {
+      labelPeriod(g, col, w, bottom);
+      continue;
     }
 
     // Étiquettes du tronçon.
@@ -179,7 +187,38 @@ export function renderTray(svg, core, tray) {
   return { byLayer, veins, focusRing };
 }
 
-const fmtDepth = words => depthMeters(words).toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+/** Trait de lacune : dents de scie rouges sur un liseré clair, lisibles sur toutes les couches. */
+function hiatusMark(g, y, w, label, title) {
+  let d = `M-6 ${y}`;
+  for (let x = -6, i = 0; x <= w + 6; x += 5, i++) d += ` L${x} ${y + (i % 2 ? 3 : -3)}`;
+  const mark = el('g', { class: 'hiatus-mark' }, g);
+  el('path', { d, class: 'hiatus-halo' }, mark);
+  el('path', { d, class: 'hiatus' }, mark);
+  if (label) el('text', { x: w + 5, y: y + 3.5, class: 'hiatus-label' }, mark).textContent = label;
+  el('title', {}, mark).textContent = title;
+}
+
+/** Étiquettes d'une carotte par période ; une période vide est une lacune. */
+function labelPeriod(g, col, w, bottom) {
+  const n = col.pieces.length;
+  // Sous-titre affiché seulement s'il tient dans la largeur du tronçon (≈ 5,5 px par caractère).
+  const sub = col.sub && col.sub.length * 5.5 <= w + 14 ? col.sub : '';
+  el('text', { x: w / 2, y: sub ? -28 : -20, class: 'col-id', 'text-anchor': 'middle' }, g).textContent = col.title;
+  if (sub) el('text', { x: w / 2, y: -14, class: 'col-depth', 'text-anchor': 'middle' }, g).textContent = sub;
+  if (!n) {
+    // Période vide : le tronçon entier est hachuré de rouge.
+    el('rect', { x: 0, y: 0, width: w, height: col.to - col.from, rx: 7, class: 'hiatus-fill' }, g);
+    hiatusMark(g, 12, w, '', 'Lacune : aucune publication sur la période');
+    el('text', { x: w / 2, y: 34, class: 'hiatus-label', 'text-anchor': 'middle' }, g).textContent = 'lacune';
+    return;
+  }
+  el('text', { x: w / 2, y: bottom + 16, class: 'col-date', 'text-anchor': 'middle' }, g)
+    .textContent = `${n} note${n > 1 ? 's' : ''}`;
+  el('text', { x: w / 2, y: bottom + 28, class: 'col-date', 'text-anchor': 'middle' }, g)
+    .textContent = `${fmtDepth(col.words)} m`;
+}
+
+const fmtDepth = words => depthMeters(words).toLocaleString('fr-FR', { maximumFractionDigits: words < 10_000 ? 1 : 0 });
 
 /** Veines : un filet d'encre entre la couche et chacune de ses voisines liées. */
 export function drawVeins(veins, layer, tray) {

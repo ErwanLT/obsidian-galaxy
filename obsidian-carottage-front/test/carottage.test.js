@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCore, lithologies, flatten, stripTitle, publishedAt } from '../src/data.js';
-import { layoutTray, layerAt, fitScale, thickness, MIN_LAYER } from '../src/layout.js';
+import { layoutTray, layoutByPeriod, layerAt, fitScale, thickness, periodOf, periodLabel, MIN_LAYER } from '../src/layout.js';
 import { matcher } from '../src/filter.js';
 import { obsidianUrl, relativeAge } from '../src/panel.js';
 
@@ -141,5 +141,34 @@ describe('fiche', () => {
     const now = Date.UTC(2026, 9, 7);
     expect(relativeAge(now - 3 * 86_400_000, now)).toBe('il y a 3 jours');
     expect(relativeAge(now - 400 * 86_400_000, now)).toBe("l’année dernière");
+  });
+});
+
+describe('une carotte par période', () => {
+  it('aligne les périodes sur le calendrier et les nomme', () => {
+    expect(periodLabel(periodOf(Date.UTC(2025, 7, 3), 12), 12)).toEqual({ title: '2025', sub: '' });
+    expect(periodLabel(periodOf(Date.UTC(2025, 7, 3), 6), 6)).toEqual({ title: 'S2', sub: '2025' });
+    expect(periodLabel(periodOf(Date.UTC(2025, 1, 3), 3), 3)).toEqual({ title: 'T1', sub: '2025' });
+    expect(periodLabel(periodOf(Date.UTC(2025, 1, 3), 1), 1)).toEqual({ title: 'févr.', sub: '2025' });
+  });
+
+  it('un tronçon par an, années vides comprises, à une échelle commune', () => {
+    const core = buildCore(universe());
+    const tray = layoutByPeriod(core, 300, 12, { minMedian: 0 });
+    expect(tray.columns.map(c => c.title)).toEqual(['meuble', '2026', '2025', 'socle']);
+    expect(tray.columns.map(c => c.pieces.length)).toEqual([1, 2, 1, 1]);
+    // b (400 mots) est le plus chargé : il remplit la hauteur.
+    expect(tray.columns[2].pieces[0].y1).toBeCloseTo(300, 0);
+    expect(tray.columns[1].pieces.at(-1).y1).toBeCloseTo(150, 0);
+    const a = core.layers.find(l => l.node.name === 'a');
+    expect(layerAt(tray, a.pieces[0].x + 5, a.pieces[0].y0 + 1)).toBe(a);
+  });
+
+  it('laisse un tronçon vide pour une période sans publication', () => {
+    const core = buildCore(universe());
+    const tray = layoutByPeriod(core, 300, 6, { minMedian: 0 });
+    const titles = tray.columns.map(c => `${c.title} ${c.sub}`);
+    expect(titles).toEqual(['meuble brouillons', 'S1 2026', 'S2 2025', 'S1 2025', 'socle non daté']);
+    expect(tray.columns[2].pieces).toHaveLength(0);
   });
 });
